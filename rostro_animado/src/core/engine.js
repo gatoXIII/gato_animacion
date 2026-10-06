@@ -50,13 +50,43 @@
     if (!isFinite(s.x) || !isFinite(s.v)) { s.x = s.t; s.v = 0; }
   }
 
-  /* Interpolación punto a punto entre dos anillos de contorno */
-  function lerpRing(a, b, t) {
-    var out = new Array(a.length);
-    for (var i = 0; i < a.length; i++) {
-      out[i] = [a[i][0] + (b[i][0] - a[i][0]) * t, a[i][1] + (b[i][1] - a[i][1]) * t];
+  /* Interpolación punto a punto entre dos anillos de contorno.
+   * P6 (rendimiento): variante con buffer reutilizable — se invoca en cada fotograma de
+   * transición ocular/bucal; sin destino preasignado la versión anterior generaba ~2 arrays
+   * por punto por frame (basura para el GC). `out` debe tener la misma longitud que los
+   * anillos (los anillos de una misma familia comparten n.º de puntos por construcción). */
+  function lerpRingInto(out, a, b, t) {
+    var n = Math.min(a ? a.length : 0, b ? b.length : 0);
+    /* R1: los anillos de origen/destino pueden tener longitudes distintas entre familias
+     * (p. ej. boca MOUTH_N=24 vs anillos oculares EYE_N=48, o pools personalizados).
+     * `out` es un buffer preasignado que puede estar parcialmente materializado, así que
+     * se rellena desde 0 hasta n — nunca depender del estado previo de `out`. */
+    if (!out || out.length !== n) {
+      if (!out) out = new Array(n);
+      else out.length = n;
+      for (var j = 0; j < n; j++) out[j] = [0, 0];
+    }
+    for (var i = 0; i < n; i++) {
+      /* FIX v22b: blindaje — si `out` llegó holey o con puntos no materiales
+       * (arrays sparse), se crea el punto en lugar de escribir sobre undefined. */
+      var p = out[i];
+      if (!p) p = out[i] = [0, 0];
+      var pa = a[i], pb = b[i];
+      if (!pa || !pb) continue;
+      p[0] = pa[0] + (pb[0] - pa[0]) * t;
+      p[1] = pa[1] + (pb[1] - pa[1]) * t;
     }
     return out;
+  }
+  function lerpRing(a, b, t) {
+    /* FIX v22b: `new Array(n)` creaba un array HOLEY (sin elementos materiales); al
+     * normalizarlo dentro de lerpRingInto se conservaban los huecos y `out[i]` era
+     * undefined → "Cannot set properties of undefined (setting '0')". Se materializa
+     * cada punto [0,0] antes de interpolary se blinda el acceso por índice. */
+    var n = Math.min(a ? a.length : 0, b ? b.length : 0);
+    var out = new Array(n);
+    for (var j = 0; j < n; j++) out[j] = [0, 0];
+    return lerpRingInto(out, a, b, t);
   }
 
   /* Rebote: 4 segmentos de parábola decreciente */
@@ -388,7 +418,8 @@
 
   function lerpPose(a, b, t) {
     var out = defaultPose();
-    POSE_PARTS.forEach(function (part) {
+    for (var pi = 0; pi < POSE_PARTS.length; pi++) {
+      var part = POSE_PARTS[pi];
       var pa = a[part], pb = b[part], po = out[part];
       for (var k in pb) {
         var vb = pb[k];
@@ -396,22 +427,45 @@
         else if (k === 'color') po[k] = lerpColor(pa[k] || vb, vb, t);
         else po[k] = vb;
       }
-    });
+    }
     return out;
   }
 
-  function sampleFrameList(frames, t) {
-    if (!frames.length) return null;
-    if (t <= frames[0].at) return clonePose(frames[0].pose);
-    var last = frames[frames.length - 1];
-    if (t >= last.at) return clonePose(last.pose);
-    for (var i = 0; i < frames.length - 1; i++) {
-      var a = frames[i], b = frames[i + 1];
-      if (t >= a.at && t < b.at) {
-        return lerpPose(a.pose, b.pose, easeInOutCubic((t - a.at) / (b.at - a.at)));
+  /* P8: muestreo binario de fotogramas de secuencia — la lineal O(n) por frame se
+   * convierte en O(log n), con fast-path de ventana deslizante vía `lo` (índice
+   * sugerido por el llamador; si t cae fuera de [lo, lo+1) se rehace la búsqueda
+   * completa, p. ej. tras saltos de pestaña o dt grandes).
+   * INVARIANTE: puede devolver una pose CONGELADA (Object.freeze) perteneciente a la
+   * secuencia — solo lectura. Los puntos de mutación (_compose, _applyClickBeat) deben
+   * clonar antes de escribir. `sampleFrameList` preserva la semántica histórica de
+   * siempre-devolver-copia para consumidores externos. */
+  function freezePose(p) {
+    Object.freeze(p.body); Object.freeze(p.left); Object.freeze(p.right);
+    Object.freeze(p.face); return Object.freeze(p);
+  }
+
+  function sampleFrames(frames, t, lo) {
+    var n = frames.length;
+    if (!n) return null;
+    if (t <= frames[0].at) return frames[0].pose;
+    if (t >= frames[n - 1].at) return frames[n - 1].pose;
+    var i0 = 0, i1 = n - 1;
+    if (lo > 0 && lo < n - 1 && frames[lo].at <= t && t < frames[lo + 1].at) {
+      i0 = lo; i1 = lo + 1;
+    } else {
+      while (i0 < i1 - 1) {
+        var m = (i0 + i1) >> 1;
+        if (frames[m].at <= t) i0 = m; else i1 = m;
       }
     }
-    return clonePose(last.pose);
+    var a = frames[i0], b = frames[i1];
+    return lerpPose(a.pose, b.pose, easeInOutCubic((t - a.at) / (b.at - a.at)));
+  }
+
+  /* Copia defensiva sobre el resultado (puede ser una pose congelada). */
+  function sampleFrameList(frames, t) {
+    var p = sampleFrames(frames, t);
+    return p ? clonePose(p) : null;
   }
 
   /* ---------------- Primitivas de animación ---------------- */
@@ -623,8 +677,11 @@
       raw: raw
     };
     if (raw.sequence) {
+      /* P8: los fotogramas se congelan tras precalcularlos — sampleFrames puede
+       * devolverlos directamente (cero clonación por frame); cualquier escritura
+       * accidental fuera del punto de mutación (_compose) falla en desarrollo. */
       var frames = raw.sequence.frames.map(function (f) {
-        return { at: f.at || 0, pose: resolvePoseColors(applySpec(clonePose(base), f), ch) };
+        return { at: f.at || 0, pose: freezePose(resolvePoseColors(applySpec(clonePose(base), f), ch)) };
       }).sort(function (x, y) { return x.at - y.at; });
       def.sequence = { frames: frames, settle: raw.sequence.settle || 'base' };
     }
@@ -834,6 +891,8 @@
     this._exprSlot = 'calm';
     this._poolPos = 0;
     this._poolNext = 0;
+    /* P6: buffers reutilizables de interpolación — evita asignaciones por fotograma */
+    this._ringBuf = [[], []];
 
      /* ---- subsistema de deformación de la boca ---- */
     var flat = ch.mouthShapes.flat;
@@ -843,6 +902,7 @@
     this._mouthSpring = spring(1);
     this._mouthSlot = 'flat';
     this._mouthHoldUntil = 0;
+    this._mouthBuf = [];
 
      /* ---- sistema de parpadeo ---- */
     this._open = spring(1);
@@ -938,7 +998,7 @@
       this._transStart = now;
       this._transDur = this._prevPose ? def.transition : 0;
       this._seq = def.sequence
-        ? { frames: def.sequence.frames, settle: def.sequence.settle, done: false }
+        ? { frames: def.sequence.frames, settle: def.sequence.settle, done: false, lo: 0 }
         : null;
       if (!o.auto) this._lastActivity = now;
 
@@ -1278,7 +1338,9 @@
         if (res === 'switch') {
           return depth < 4 ? this._compose(now, depth + 1) : clonePose(this._def.base);
         }
-        pose = res || clonePose(def.base);
+        /* P8: sampleFrames puede devolver una pose congelada de la secuencia (inmutable);
+         * se clona aquí — único punto de mutación — para no corromper los fotogramas. */
+        pose = res ? clonePose(res) : clonePose(def.base);
       } else {
         pose = clonePose(def.base);
       }
@@ -1367,13 +1429,13 @@
       }
 
       /* ---- anillo ocular / boca actual: interpolación deformada punto a punto,
-         cuando se detiene reutiliza la referencia del objetivo ---- */
+         cuando se detiene reutiliza la referencia del objetivo.
+         P6: escribe en buffers preasignados (lerpRingInto) — cero asignaciones por frame. */
       if (this._ringSpring.x < 0.999 || this._ringSpring.v > 0.001 || this._ringSpring.v < -0.001) {
         var rs = clamp(this._ringSpring.x, 0, 1.35);
-        this._ringCur = [
-          lerpRing(this._ringSrc[0], this._ringDst[0], rs),
-          lerpRing(this._ringSrc[1], this._ringDst[1], rs)
-        ];
+        lerpRingInto(this._ringBuf[0], this._ringSrc[0], this._ringDst[0], rs);
+        lerpRingInto(this._ringBuf[1], this._ringSrc[1], this._ringDst[1], rs);
+        this._ringCur = this._ringBuf;
       } else if (this._ringCur !== this._ringDst) {
         this._ringCur = this._ringDst;
       }
@@ -1382,7 +1444,7 @@
 
       if (this._mouthSpring.x < 0.999 || Math.abs(this._mouthSpring.v) > 0.001) {
         var ms = clamp(this._mouthSpring.x, 0, 1.25);
-        this._mouthCur = lerpRing(this._mouthSrc, this._mouthDst, ms);
+        this._mouthCur = lerpRingInto(this._mouthBuf, this._mouthSrc, this._mouthDst, ms);
       } else if (this._mouthCur !== this._mouthDst) {
         this._mouthCur = this._mouthDst;
       }
@@ -1537,15 +1599,16 @@
         return clonePose(last.pose);
       }
 
-      if (t <= frames[0].at) return clonePose(frames[0].pose);
-      for (var i = 0; i < frames.length - 1; i++) {
-        var a = frames[i], b = frames[i + 1];
-        if (t >= a.at && t < b.at) {
-          var k = easeInOutCubic((t - a.at) / (b.at - a.at));
-          return lerpPose(a.pose, b.pose, k);
-        }
+      /* P8: muestreo binario O(log n) con ventana deslizante (seq.lo). El resultado
+       * puede ser una pose congelada de la secuencia (inmutable); _compose es el único
+       * punto de mutación y clona antes de aplicar animadores. */
+      var p = sampleFrames(frames, t, seq.lo);
+      /* avanzar la pista solo si no retrocede (t crece monótonamente; el reinicio de
+       * emoción regenera _seq con lo = 0) */
+      if (p && p !== frames[0].pose) {
+        while (seq.lo < frames.length - 2 && frames[seq.lo + 1].at <= t) seq.lo++;
       }
-      return clonePose(last.pose);
+      return p;
     }
   };
 
@@ -1554,13 +1617,26 @@
   MM.create = function (target, opts) { return new Engine(target, opts); };
   MM.version = '1.0.0';
 
-  /* Cargar configuración semilla (emotions.js se carga antes que este script) */
-  if (Array.isArray(window.EMOTION_SEED)) {
-    window.EMOTION_SEED.forEach(function (raw) {
+  /* Cargar configuración semilla (emotions.js se carga antes que este script).
+   * R2: compatible con ambos formatos — array plano de emociones (histórico) u
+   * objeto { presets, emotions } (salida canónica de tools/seed-to-json.js).
+   * Antes, un seed en formato objeto quedaba fuera del `Array.isArray` y el motor
+   * arrancaba sin catálogo → "emoción desconocida" y caída en _compose. */
+  (function loadSeed() {
+    var seed = window.EMOTION_SEED;
+    if (!seed) return;
+    var arr, presets = null;
+    if (Array.isArray(seed)) arr = seed;
+    else if (Array.isArray(seed.emotions)) { arr = seed.emotions; presets = seed.presets || null; }
+    else return;
+    if (presets) {
+      Object.keys(presets).forEach(function (pn) { MM.config.registerPreset(pn, presets[pn]); });
+    }
+    arr.forEach(function (raw) {
       var r = register(raw);
       if (!r.ok) console.warn('[MoodMates] configuración semilla inválida：', r.id, r.errors);
     });
-  }
+  })();
 
   /* Extensión emoji U+1F600–U+1F637: seed opcional que exporta src/data/emoji-map.js.
    * Se carga solo si el archivo está presente en la página (antes que engine.js);

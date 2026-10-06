@@ -107,7 +107,15 @@
     gazeTargets.forEach(function (t) { t.rect = null; });
   }
   function clamp06(v) { return v < -0.6 ? -0.6 : (v > 0.6 ? 0.6 : v); }
-  window.addEventListener('pointermove', function (e) {
+  /* P1: el puntero llega a >100 Hz; el trabajo real (lectura de rects + setGaze sobre
+   * todas las instancias) se coalescea a un máximo de 1 por fotograma en el próximo rAF,
+   * evitando hasta ~5x getBoundingClientRect forzado por evento en pantallas de alta tasa. */
+  var pendingPointer = null, gazeRaf = 0;
+  function flushGaze() {
+    gazeRaf = 0;
+    var e = pendingPointer;
+    if (!e) return;
+    pendingPointer = null;
     var now = performance.now();
     for (var i = 0; i < gazeTargets.length; i++) {
       var t = gazeTargets[i];
@@ -122,6 +130,11 @@
         clamp06((e.clientY - (r.top + r.height / 2)) / r.height) / 0.6
       );
     }
+  }
+  window.addEventListener('pointermove', function (e) {
+    /* coords en crudo: no retener objetos Event (conserva referencias nativas) */
+    pendingPointer = { clientX: e.clientX, clientY: e.clientY };
+    if (!gazeRaf) gazeRaf = requestAnimationFrame(flushGaze);
   }, { passive: true });
   document.addEventListener('pointerleave', function () {
     gazeTargets.forEach(function (t) { t.engine.clearGaze(); });
@@ -824,9 +837,11 @@
     else if (!main.signature || !main.signature(1)) main.spin(1);
   });
 
-  /* Cualquier interacción del usuario reinicia el temporizador de espera */
+  /* Cualquier interacción del usuario reinicia el temporizador de espera
+   * FIX v22b: guarda nula — si la creación principal falló antes (p. ej. excepción en
+   * setEmotion), `main` es null y estos listeners globales inundaban la consola. */
   ['pointerdown', 'keydown'].forEach(function (evt) {
-    document.addEventListener(evt, function () { main.resetIdle(); }, { passive: true });
+    document.addEventListener(evt, function () { if (main) main.resetIdle(); }, { passive: true });
   });
 
   /* ---------------- Inicialización ---------------- */

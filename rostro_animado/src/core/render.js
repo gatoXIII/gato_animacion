@@ -66,17 +66,21 @@
    function ringPath(ring) {
       var n = ring.length;
       if (n < 3) return 'M0 0Z';
-      var s = 'M' + ring[0][0].toFixed(2) + ' ' + ring[0][1].toFixed(2);
+      /* P7: array de fragmentos + join — la concatenación con += generaba O(n²)
+       * copias de string en cada fotograma de deformación */
+      var segs = new Array(n + 2);
+      segs[0] = 'M' + ring[0][0].toFixed(2) + ' ' + ring[0][1].toFixed(2);
       for (var i = 0; i < n; i++) {
          var p0 = ring[(i - 1 + n) % n];
          var p1 = ring[i];
          var p2 = ring[(i + 1) % n];
          var p3 = ring[(i + 2) % n];
-         s += 'C' + (p1[0] + (p2[0] - p0[0]) / 6).toFixed(2) + ' ' + (p1[1] + (p2[1] - p0[1]) / 6).toFixed(2) +
+         segs[i + 1] = 'C' + (p1[0] + (p2[0] - p0[0]) / 6).toFixed(2) + ' ' + (p1[1] + (p2[1] - p0[1]) / 6).toFixed(2) +
             ' ' + (p2[0] - (p3[0] - p1[0]) / 6).toFixed(2) + ' ' + (p2[1] - (p3[1] - p1[1]) / 6).toFixed(2) +
             ' ' + p2[0].toFixed(2) + ' ' + p2[1].toFixed(2);
       }
-      return s + 'Z';
+      segs[n + 1] = 'Z';
+      return segs.join('');
    }
    function centroid(ring) {
       var x = 0, y = 0;
@@ -479,6 +483,17 @@
       var curBodyColor = null;
       var curSketch = -1;
       var prevYaw = 0, prevNow = 0;
+      /* P5: guardado de diff por nodo (WeakMap, sin closures) — setAttribute sobre un
+       * valor idéntico igual invalida el árbol de render SVG; elimina el trabajo
+       * redundante en los nodos estáticos durante la mayor parte del bucle. */
+      var attrCache = new WeakMap();
+      function setAttr(node, name, val) {
+        var c = attrCache.get(node);
+        if (!c) { c = Object.create(null); attrCache.set(node, c); }
+        else if (c[name] === val) return;
+        c[name] = val;
+        node.setAttribute(name, val);
+      }
 
       function setBodyColor(color) {
          if (color === curBodyColor) return;
@@ -756,12 +771,14 @@
             al elevarse del suelo (rebote) se contrae y atenúa */
          var lift = clamp(-b.y / 52, 0, 1);
          var shOp = sketch > 0.5 ? 0 : 0.16 * (1 - 0.55 * lift);
-         shadow.setAttribute('opacity', shOp.toFixed(3));
+         var shOpStr = shOp.toFixed(3);
+         setAttr(shadow, 'opacity', shOpStr);
          if (shOp > 0.001) {
-            shadow.setAttribute('transform',
+            var shTf =
                'translate(' + r2(C + b.x * 0.7) + ' ' + shadowCy + ')' +
                ' scale(' + r2((1 - 0.3 * lift) * b.scale) + ' ' + r2(1 - 0.35 * lift) + ')' +
-               ' translate(' + (-C) + ' ' + (-shadowCy) + ')');
+               ' translate(' + (-C) + ' ' + (-shadowCy) + ')';
+            setAttr(shadow, 'transform', shTf);
          }
 
          /* El modo boceto es un interruptor de visualización: cambiar según el umbral,
