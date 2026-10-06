@@ -1,4 +1,3 @@
-
 /* ============================================================
  * engine.js — Capa de motor (depende de geometry / render / features / fx; consume datos puros de emotions.js)
  *
@@ -57,9 +56,14 @@
    * por punto por frame (basura para el GC). `out` debe tener la misma longitud que los
    * anillos (los anillos de una misma familia comparten n.º de puntos por construcción). */
   function lerpRingInto(out, a, b, t) {
-    var n = Math.min(a.length, b.length);
-    if (out.length !== n) {
-      out.length = n;
+    var n = Math.min(a ? a.length : 0, b ? b.length : 0);
+    /* R1: los anillos de origen/destino pueden tener longitudes distintas entre familias
+     * (p. ej. boca MOUTH_N=24 vs anillos oculares EYE_N=48, o pools personalizados).
+     * `out` es un buffer preasignado que puede estar parcialmente materializado, así que
+     * se rellena desde 0 hasta n — nunca depender del estado previo de `out`. */
+    if (!out || out.length !== n) {
+      if (!out) out = new Array(n);
+      else out.length = n;
       for (var j = 0; j < n; j++) out[j] = [0, 0];
     }
     for (var i = 0; i < n; i++) {
@@ -1601,13 +1605,26 @@
   MM.create = function (target, opts) { return new Engine(target, opts); };
   MM.version = '1.0.0';
 
-  /* Cargar configuración semilla (emotions.js se carga antes que este script) */
-  if (Array.isArray(window.EMOTION_SEED)) {
-    window.EMOTION_SEED.forEach(function (raw) {
+  /* Cargar configuración semilla (emotions.js se carga antes que este script).
+   * R2: compatible con ambos formatos — array plano de emociones (histórico) u
+   * objeto { presets, emotions } (salida canónica de tools/seed-to-json.js).
+   * Antes, un seed en formato objeto quedaba fuera del `Array.isArray` y el motor
+   * arrancaba sin catálogo → "emoción desconocida" y caída en _compose. */
+  (function loadSeed() {
+    var seed = window.EMOTION_SEED;
+    if (!seed) return;
+    var arr, presets = null;
+    if (Array.isArray(seed)) arr = seed;
+    else if (Array.isArray(seed.emotions)) { arr = seed.emotions; presets = seed.presets || null; }
+    else return;
+    if (presets) {
+      Object.keys(presets).forEach(function (pn) { MM.config.registerPreset(pn, presets[pn]); });
+    }
+    arr.forEach(function (raw) {
       var r = register(raw);
       if (!r.ok) console.warn('[MoodMates] configuración semilla inválida：', r.id, r.errors);
     });
-  }
+  })();
 
   /* Extensión emoji U+1F600–U+1F637: seed opcional que exporta src/data/emoji-map.js.
    * Se carga solo si el archivo está presente en la página (antes que engine.js);
