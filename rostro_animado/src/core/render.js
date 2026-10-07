@@ -1,4 +1,3 @@
-
 /* ============================================================
  * render.js — Capa de renderizado (solo renderizado, sin lógica de negocio)
  *
