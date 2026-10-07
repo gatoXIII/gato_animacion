@@ -836,9 +836,11 @@
     else if (!main.signature || !main.signature(1)) main.spin(1);
   });
 
-  /* Cualquier interacción del usuario reinicia el temporizador de espera */
+  /* Cualquier interacción del usuario reinicia el temporizador de espera
+   * FIX v22b: guarda nula — si la creación principal falló antes (p. ej. excepción en
+   * setEmotion), `main` es null y estos listeners globales inundaban la consola. */
   ['pointerdown', 'keydown'].forEach(function (evt) {
-    document.addEventListener(evt, function () { main.resetIdle(); }, { passive: true });
+    document.addEventListener(evt, function () { if (main) main.resetIdle(); }, { passive: true });
   });
 
   /* ---------------- Inicialización ---------------- */

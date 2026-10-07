@@ -67,14 +67,26 @@
       for (var j = 0; j < n; j++) out[j] = [0, 0];
     }
     for (var i = 0; i < n; i++) {
-      var p = out[i], pa = a[i], pb = b[i];
+      /* FIX v22b: blindaje — si `out` llegó holey o con puntos no materiales
+       * (arrays sparse), se crea el punto en lugar de escribir sobre undefined. */
+      var p = out[i];
+      if (!p) p = out[i] = [0, 0];
+      var pa = a[i], pb = b[i];
+      if (!pa || !pb) continue;
       p[0] = pa[0] + (pb[0] - pa[0]) * t;
       p[1] = pa[1] + (pb[1] - pa[1]) * t;
     }
     return out;
   }
   function lerpRing(a, b, t) {
-    return lerpRingInto(new Array(a.length), a, b, t);
+    /* FIX v22b: `new Array(n)` creaba un array HOLEY (sin elementos materiales); al
+     * normalizarlo dentro de lerpRingInto se conservaban los huecos y `out[i]` era
+     * undefined → "Cannot set properties of undefined (setting '0')". Se materializa
+     * cada punto [0,0] antes de interpolary se blinda el acceso por índice. */
+    var n = Math.min(a ? a.length : 0, b ? b.length : 0);
+    var out = new Array(n);
+    for (var j = 0; j < n; j++) out[j] = [0, 0];
+    return lerpRingInto(out, a, b, t);
   }
 
   /* Rebote: 4 segmentos de parábola decreciente */
