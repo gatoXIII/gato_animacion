@@ -1614,7 +1614,11 @@
 
   /* ---------------- interfaz externa ---------------- */
 
+  /* La API pública vive en el mismo objeto de namespace que geometry/render/fx.
+   * Reasignar `MM` a una función aquí descartaba config, characters y createBall,
+   * y además dejaba window.MoodMates apuntando al objeto antiguo. */
   MM.create = function (target, opts) { return new Engine(target, opts); };
+  MM.Engine = Engine;
   MM.version = '1.0.0';
 
   /* Cargar configuración semilla (emotions.js se carga antes que este script).

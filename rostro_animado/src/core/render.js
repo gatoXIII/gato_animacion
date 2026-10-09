@@ -40,7 +40,14 @@
 
    function el(tag, attrs) {
       var node = document.createElementNS(SVGNS, tag);
-      for (var k in attrs) node.setAttribute(k, attrs[k]);
+      for (var k in attrs) {
+         if (!Object.prototype.hasOwnProperty.call(attrs, k)) continue;
+         var value = attrs[k];
+         /* SVG DOM convierte undefined en el literal "undefined" y produce
+          * errores de parseo (por ejemplo en x/y opcionales de partículas). */
+         if (value == null || (typeof value === 'number' && !isFinite(value))) continue;
+         node.setAttribute(k, String(value));
+      }
       return node;
    }
    function r2(v) { return Math.round(v * 100) / 100; }
@@ -358,7 +365,7 @@
          defs.appendChild(lg);
          var bb0 = eye.defBBox;
          eye.lidShadow = el('rect', {
-            x: bb0.x, y: bb0.y, width: bb0.w, height: bb0.h,
+            x: bb0.minX, y: bb0.minY, width: bb0.w, height: bb0.h,
             fill: 'url(#' + lidShadowId + ')', opacity: 0.55, 'pointer-events': 'none'
          });
          inner.appendChild(eye.lidShadow);
