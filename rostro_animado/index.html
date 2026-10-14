@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Mood Mates · Galería de personajes · Dos personajes originales × 32 expresiones de estado (SVG impulsado en tiempo real / Conexión emotionId con IA / Bilingüe y doble tema)">
+  <title>Mood Mates · Galería de personajes</title>
+  <link rel="icon" type="image/png" href="assets/img/favicon.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="site/style.css?v=21e">
+</head>
+<body class="mode-wall">
+
+  <!-- Navegación suspensa: logotipo de marca / idioma / tema -->
+  <header class="topbar">
+    <div class="brand">
+      <span id="brandBall" class="brand-ball" aria-hidden="true"></span>
+      <span class="brand-name" data-i18n="brandName">Mood Mates</span>
+    </div>
+    <div class="top-actions">
+      <button type="button" id="callToggle" class="icon-btn call-btn" aria-label="Videollamada con el bot" title="Videollamada con el bot">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+      </button>
+      <button type="button" id="langToggle" class="icon-btn lang-btn">EN</button>
+      <button type="button" id="themeToggle" class="icon-btn" aria-label="Theme">
+        <svg class="ico-moon" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+        <svg class="ico-sun" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <main class="page">
+
+    <!-- Hero de apertura: título grande + personaje de línea de boceto semitransparente en la base -->
+    <section class="hero" id="hero">
+      <div class="hero-backdrop" aria-hidden="true"></div>
+      <div class="hero-copy">
+        <p class="hero-eyebrow" data-i18n="heroEyebrow">MOOD MATES</p>
+        <h1 class="hero-title" data-i18n="heroTitle">Un equipo completo de compañeros-originales que expresan emociones</h1>
+        <p class="hero-sub" data-i18n="heroSub">2 personajes originales × 32 expresiones de estado · SVG impulsado en tiempo real · Un emotionId para conectar con IA</p>
+        <button type="button" id="heroCta" class="hero-cta"><span data-i18n="heroCta">Ver galería</span><span class="cta-arrow" aria-hidden="true">↓</span></button>
+      </div>
+      <p class="hero-hint" data-i18n="heroHint">Muévle el ratón y te mirará · Haz clic para ver su movimiento distintivo</p>
+      <div class="hero-bot-clip" aria-hidden="true">
+        <div id="heroBot" class="hero-bot"></div>
+      </div>
+    </section>
+
+    <!-- Zona principal de la galería: fila de personajes + doble modo (muro / álbum) -->
+    <section class="gallery" id="gallery">
+      <!-- Fila de personajes: situada encima de las pestañas de filtro, clicar para cambiar toda la galería -->
+      <div id="castRow" class="cast-row" aria-label="Characters"></div>
+
+      <div class="gallery-head">
+        <nav class="mode-switch" aria-label="View mode">
+          <button type="button" id="modeWall" class="mode-btn active" data-i18n="navWall">Muro</button>
+          <button type="button" id="modeAlbum" class="mode-btn" data-i18n="navAlbum">Álbum</button>
+        </nav>
+        <nav id="tabs" class="tabs"></nav>
+        <p id="galleryHint" class="gallery-hint" data-i18n="galleryHint">Haz clic en la carta del personaje para cambiar · haz clic en la miniatura para cambiar la expresión · ← / → para navegar</p>
+        <button type="button" id="settingsToggle" class="icon-btn settings-btn" aria-label="Settings">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.55-1 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.09a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.09a1.7 1.7 0 0 0 1.55 1H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1z"/></svg>
+        </button>
+      </div>
+
+      <div class="thumb-zone" id="thumbZone">
+        <div id="thumbFlow" class="thumb-flow"></div>
+      </div>
+
+      <div class="stage-zone">
+        <button type="button" id="navPrev" class="pager-btn" aria-label="Previous">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M15 18l-6-6 6-6"/></svg>
+        </button>
+
+        <div class="stage-block">
+          <button type="button" id="stageClose" class="icon-btn stage-close" aria-label="Close">
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+          </button>
+          <div id="tips" class="tips" role="status"></div>
+          <div id="stage" class="stage"></div>
+          <div class="emo-meta">
+            <span id="emoId" class="emo-id">ID --</span>
+            <span id="emoName" class="emo-name">--</span>
+            <span id="pager" class="pager-ind">-- / --</span>
+          </div>
+          <p id="emoDesc" class="emo-desc"></p>
+        </div>
+
+        <button type="button" id="navNext" class="pager-btn" aria-label="Next">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Pie de página: declaración de originalidad + entrada de licencia comercial -->
+  <footer class="site-foot">
+    <p data-i18n="footNote">Todos los personajes de Mood Mates son diseños originales. Uso gratuito para aprendizaje personal; para uso comercial, consulta LICENSE-COMMERCIAL.md en el repositorio.</p>
+  </footer>
+
+  <!-- Cajón de configuración -->
+  <div id="drawerMask" class="drawer-mask" hidden></div>
+  <aside id="drawer" class="drawer" aria-hidden="true">
+    <div class="drawer-head">
+      <h2 data-i18n="drawerTitle">Configuración</h2>
+      <button type="button" id="drawerClose" class="icon-btn" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+
+    <section class="drawer-sec">
+      <h3 data-i18n="secAppearance">Apariencia</h3>
+      <div class="field">
+        <label for="charSelect" data-i18n="lblCharacter">Personaje</label>
+        <select id="charSelect" class="select"></select>
+      </div>
+      <div class="field" id="variantField" style="display:none">
+        <label for="variantSelect" data-i18n="lblVariant">Contorno corporal</label>
+        <select id="variantSelect" class="select"></select>
+      </div>
+      <div class="field">
+        <label for="sketchToggle" data-i18n="lblSketch">Modo boceto</label>
+        <label class="switch">
+          <input type="checkbox" id="sketchToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+    </section>
+
+    <section class="drawer-sec">
+      <h3 data-i18n="secDemo">Demostración</h3>
+      <div class="field">
+        <label for="tourToggle" data-i18n="lblTour">Recorrido automático</label>
+        <label class="switch">
+          <input type="checkbox" id="tourToggle">
+          <span class="slider"></span>
+        </label>
+      </div>
+      <div class="field">
+        <label for="tourInterval" data-i18n="lblInterval">Intervalo de recorrido</label>
+        <select id="tourInterval" class="select">
+          <option value="1500">1.5s</option>
+          <option value="2500" selected>2.5s</option>
+          <option value="4000">4s</option>
+        </select>
+      </div>
+    </section>
+
+    <section class="drawer-sec">
+      <h3 data-i18n="secAI">Simulación de conexión IA</h3>
+      <input id="aiInput" class="ai-input" type="text" spellcheck="false"
+             value='{"emotionId":"30","tips":"Pensando en la pregunta del usuario"}'>
+      <div class="btn-row">
+        <button type="button" id="aiSend" class="btn primary" data-i18n="btnSend">Enviar</button>
+        <button type="button" id="aiSampleErr" class="btn ghost" data-i18n="btnSampleErr">Ejemplo: error</button>
+        <button type="button" id="aiSampleBad" class="btn ghost" data-i18n="btnSampleBad">Ejemplo: ID desconocido</button>
+      </div>
+    </section>
+
+    <section class="drawer-sec">
+      <h3 data-i18n="secConfig">Configuración</h3>
+      <div class="btn-row">
+        <button type="button" id="btnExport" class="btn" data-i18n="btnExport">Exportar configuración</button>
+        <button type="button" id="btnImport" class="btn" data-i18n="btnImport">Importar configuración</button>
+      </div>
+      <input type="file" id="importFile" accept=".json,application/json" hidden>
+    </section>
+  </aside>
+
+  <!-- ═══════ Modal de videollamada con bot animado (call-overlay) ═══════
+       Reutiliza la capa multimedia src/media/* sobre el motor ya cargado en esta página.
+       La versión standalone completa sigue disponible en call.html -->
+  <div id="callMask" class="drawer-mask" hidden></div>
+  <aside id="callOverlay" class="call-overlay" aria-hidden="true">
+    <div class="call-head">
+      <h2 data-i18n="callTitle">📞 Videollamada con el bot</h2>
+      <button type="button" id="callClose" class="icon-btn" aria-label="Close">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+    </div>
+
+    <div id="callStatus" class="call-status">Pulsa «Iniciar llamada» para conectar cámara y micrófono.</div>
+
+    <div class="call-grid">
+      <div class="call-col">
+        <div id="callBotBox" class="call-bot-box"></div>
+        <p class="call-meta">Emoción: <span id="callBotEmo">--</span> · WebRTC: <span id="callRtcState" class="call-badge idle">idle</span></p>
+        <label for="callCharSelect" data-i18n="lblCharacter">Personaje</label>
+        <select id="callCharSelect" class="select">
+          <option value="nimbo" selected>Nimbo</option>
+          <option value="twinkle">Twinkle</option>
+        </select>
+      </div>
+
+      <div class="call-col">
+        <label for="callCameraSelect" data-i18n="callCamLabel">Cámara</label>
+        <select id="callCameraSelect" class="select"><option value="">Predeterminado</option></select>
+        <video id="callLocalVideo" autoplay playsinline muted></video>
+
+        <label for="callMicSelect" data-i18n="callMicLabel">Micrófono</label>
+        <select id="callMicSelect" class="select"><option value="">Predeterminado</option></select>
+
+        <label for="callSpeakerSelect" data-i18n="callSpkLabel">Bocina / salida (setSinkId)</label>
+        <select id="callSpeakerSelect" class="select"><option value="">Predeterminado</option></select>
+        <audio id="callRemoteAudio" autoplay controls></audio>
+      </div>
+    </div>
+
+    <div class="call-controls">
+      <button type="button" id="callStartBtn" class="btn primary" data-i18n="callBtnStart">📞 Iniciar llamada</button>
+      <button type="button" id="callMuteBtn" class="btn" disabled data-i18n="callBtnMute">🎤 Silenciar</button>
+      <button type="button" id="callCamBtn" class="btn" disabled data-i18n="callBtnCam">📷 Cámara OFF</button>
+      <button type="button" id="callEndBtn" class="btn ghost" disabled data-i18n="callBtnEnd">☎️ Colgar</button>
+    </div>
+    <p class="call-hint" data-i18n="callHint">Señalización loopback local (sin servidor). Para un backend real, usa call.html con modo WebSocket.</p>
+  </aside>
+
+  <!-- Indicador de estado flotante -->
+  <div id="toast" class="toast" role="status"></div>
+
+  <!-- Orden de carga: biblioteca de geometría → capa de renderizar → capa de rasgos → capa de efectos → datos de emociones → motor → paquete de personajes → textos → capa de interacción -->
+  <script src="src/core/geometry.js"></script>
+  <script src="src/core/render.js?v=22d"></script>
+  <script src="src/core/features.js"></script>
+  <script src="src/core/fx.js?v=21a"></script>
+  <script src="src/data/emotions.js?v=22a"></script>
+  <script src="src/core/engine.js?v=22d"></script>
+  <script src="src/characters/nimbo.js?v=21a"></script>
+  <script src="src/characters/twinkle.js"></script>
+  <!-- Capa multimedia: dispositivos + WebRTC + sesión de llamada -->
+  <script src="src/media/MediaDeviceManager.js"></script>
+  <script src="src/media/WebRTCClient.js"></script>
+  <script src="src/media/CallSession.js"></script>
+  <script src="site/i18n.js"></script>
+  <script src="site/app.js"></script>
+  <!-- Glue que integra la videollamada (call.html) dentro del index -->
+  <script src="site/call.js?v=24a"></script>
+  <script src="src/tracking/FaceSelector.js"></script>
+</body>
+</html>
