@@ -1305,3 +1305,10 @@ svg.is-sketch .mm-spark {
   object-fit: cover;
 }
 #faceTrackToggle.active { background: #1d4d33; color: #8ce6b0; border-color: #2e7a50; }
+
+/* parches.md §5 — Badge del seguimiento dentro de la barra superior
+ * (el .track-badge base es absolute; aquí pasa a flujo estático). */
+.topbar .track-badge { position: static; display: none; align-items: center; }
+.topbar .track-badge.show { display: inline-flex; }
+.track-badge.st-suspended { color: #cfe8ff; }
+@media (max-width: 640px) { .topbar .track-badge { display: none !important; } }

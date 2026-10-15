@@ -20,6 +20,10 @@
       <span class="brand-name" data-i18n="brandName">Mood Mates</span>
     </div>
     <div class="top-actions">
+      <span id="trackBadge" class="track-badge" role="status" aria-live="polite"></span>
+      <button type="button" id="faceTrackToggle" class="icon-btn" aria-pressed="false" aria-label="Seguimiento facial" title="Activar seguimiento facial (cámara)">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+      </button>
       <button type="button" id="callToggle" class="icon-btn call-btn" aria-label="Videollamada con el bot" title="Videollamada con el bot">
         <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
       </button>
@@ -42,7 +46,7 @@
         <p class="hero-sub" data-i18n="heroSub">2 personajes originales × 32 expresiones de estado · SVG impulsado en tiempo real · Un emotionId para conectar con IA</p>
         <button type="button" id="heroCta" class="hero-cta"><span data-i18n="heroCta">Ver galería</span><span class="cta-arrow" aria-hidden="true">↓</span></button>
       </div>
-      <p class="hero-hint" data-i18n="heroHint">Muévle el ratón y te mirará · Haz clic para ver su movimiento distintivo</p>
+      <p class="hero-hint" data-i18n="heroHint">Activa la cámara (icono superior) y te seguirá con la mirada · Haz clic para ver su movimiento distintivo</p>
       <div class="hero-bot-clip" aria-hidden="true">
         <div id="heroBot" class="hero-bot"></div>
       </div>
@@ -230,13 +234,24 @@
   <script src="src/core/engine.js?v=22d"></script>
   <script src="src/characters/nimbo.js?v=21a"></script>
   <script src="src/characters/twinkle.js"></script>
-  <!-- Capa multimedia: dispositivos + WebRTC + sesión de llamada -->
+
+  <!-- Tracking + política compartida (EmotionPolicy DEBE cargar antes de CallSession.js:
+       éste captura MM_EmotionPolicy en tiempo de carga) -->
+  <script src="src/tracking/Filters.js"></script>
+  <script src="src/tracking/MpLoader.js"></script>
+  <script src="src/tracking/Backends.js"></script>
+  <script src="src/media/EmotionPolicy.js"></script>
+  <script src="site/shared-policy.js"></script>
+  <script src="src/tracking/FaceSelector.js"></script>
+  <script src="src/tracking/TrackingBridge.js?v=25a"></script>
+
+  <!-- Capa multimedia -->
   <script src="src/media/MediaDeviceManager.js"></script>
   <script src="src/media/WebRTCClient.js"></script>
   <script src="src/media/CallSession.js"></script>
-  <script src="site/i18n.js"></script>
-  <script src="site/app.js"></script>
-  <!-- Glue que integra la videollamada (call.html) dentro del index -->
-  <script src="site/call.js?v=1a"></script>
+
+  <script src="site/i18n.js?v=25a"></script>
+  <script src="site/app.js?v=25a"></script>
+  <script src="site/call.js?v=25a"></script>
 </body>
 </html>

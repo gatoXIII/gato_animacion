@@ -124,7 +124,14 @@
     var attendGainX = opts.attendGainX != null ? +opts.attendGainX : 2.4;
     var attendGainY = opts.attendGainY != null ? +opts.attendGainY : 1.6;
     var attendYawK  = opts.attendYawK  != null ? +opts.attendYawK  : 0.9;
+    /* parches.md §2a — compatibilidad con la API del patch: ganancia única y
+     * tope de yaw; los nombres específicos v2.5 (attendGainX/Y, attendYawK)
+     * siguen teniendo prioridad si se pasan en opts. */
+    var attendGain = opts.attendGain != null ? +opts.attendGain : 1.5;
+    var attendYawCap = opts.attendYaw != null ? +opts.attendYaw : 0.45;
     var oe = opts.oneEuro || {};
+    function dz(v) { return Math.abs(v) < 0.04 ? 0 : v; }
+    function absUrl(u) { try { return new URL(u, document.baseURI).href; } catch (e) { return u; } }
 
     var state = 'IDLE';
     /* v2.5 — epoch/generación: si destroy() ocurre durante start() (await de
@@ -208,7 +215,10 @@
       /* Owner por defecto 'call': si nadie gestiona el owner (modo standalone),
        * las señales de emoción se suprimen — el tracking solo mueve mirada,
        * párpados y giro de cabeza, nunca la expresión. */
-      var emotional = opts.signals !== false && !!policy;
+      /* parches.md §2b — señales de emoción ahora son OPT-IN: solo con
+       * opts.signals === true explícito (y política + owner 'tracking').
+       * false/undefined → el tracking jamás toca la expresión. */
+      var emotional = opts.signals === true && !!policy;
       if (s === 'LOST') {
         if (emotional && policy.owner() === 'tracking') {
           adapter.handleAIMessage({ emotionId: policy.tracking('lost') });
@@ -256,32 +266,25 @@
 
       var earL = F.eyeAspectRatio(lmArr, 'left');
       var earR = F.eyeAspectRatio(lmArr, 'right');
-      var gazeL = F.irisGaze(lmArr, 'left');
-      var gazeR = F.irisGaze(lmArr, 'right');
-      /* Convención de signo (v2.3.2): el escenario NO aplica scaleX(-1) al
-       * personaje, así que la pantalla coincide con las coordenadas crudas de
-       * la cámara. Con mirror=true (vista espejada del usuario) se voltea x:
-       * cabeza girada a la derecha del usuario → yaw positivo → bot gira a su
-       * derecha en pantalla. yawFromLandmarks(mirror=false) entrega el yaw
-       * crudo de imagen; aquí se aplica el volteo una sola vez. */
-      var pose = F.yawFromLandmarks(lmArr, false);
-      var yawOut = mirror ? -pose.yaw : pose.yaw;
-
-      /* v2.3.2 FIX — Doble inversión eliminada: irisGaze ya devuelve x en
-       * coordenadas de CABEZA (el ojo derecho se voltea internamente con sx=-1).
-       * Multiplicar otra vez por (mirror?-1:1) invertía la mirada horizontal:
-       * el bot miraba al lado contrario del usuario y el efecto parecía "no
-       * seguir el rostro". mirror solo afecta a yawFromLandmarks. */
-      var g = F.sanitizeVec(
-        (gazeL.x + gazeR.x) / 2,
-        (gazeL.y + gazeR.y) / 2
-      );
       var openAvg = F.opennessFromEAR((earL + earR) / 2, earClosed, earOpen);
 
-      /* v2.5 — modo 'attend': señal objetivo = posición del rostro en el
-       * encuadre (espejado), no la dirección de mirada/cabeza del usuario.
-       * cx/cy normalizados [0,1] sobre los landmarks de la cara seleccionada. */
-      if (mode === 'attend') {
+      var gazeX, gazeY, yawOut;
+      if (mode === 'mimic') {
+        var gazeL = F.irisGaze(lmArr, 'left');
+        var gazeR = F.irisGaze(lmArr, 'right');
+        /* Convención de signo (v2.3.2): el escenario NO aplica scaleX(-1) al
+         * personaje, así que la pantalla coincide con las coordenadas crudas de
+         * la cámara. irisGaze ya devuelve x en coordenadas de CABEZA (el ojo
+         * derecho se voltea internamente con sx=-1): NO volver a invertir. */
+        var pose = F.yawFromLandmarks(lmArr, false);
+        yawOut = mirror ? -pose.yaw : pose.yaw;
+        gazeX = (gazeL.x + gazeR.x) / 2;
+        gazeY = (gazeL.y + gazeR.y) / 2;
+      } else {
+        /* attend/parches.md §2c: dónde ESTÁ la persona en el encuadre → hacia
+         * dónde mira/gira el avatar. cx/cy normalizados [0,1] sobre los
+         * landmarks de la cara seleccionada; by0 sesgado a 0.45 porque los
+         * rostros suelen quedar algo por encima del centro del encuadre. */
         var minX = 1, maxX = 0, minY = 1, maxY = 0;
         for (var li = 0; li < lmArr.length; li++) {
           var p = lmArr[li];
@@ -292,9 +295,14 @@
         }
         var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
         var ex = mirror ? (0.5 - cx) : (cx - 0.5);   /* desplazamiento espejado */
-        g = F.sanitizeVec(ex * attendGainX, (cy - 0.5) * attendGainY);
-        yawOut = F.clamp(ex * attendYawK, -0.6, 0.6); /* giro hacia el usuario */
+        gazeX = dz(ex * attendGainX);
+        gazeY = dz((cy - 0.5) * attendGainY);
+        /* parches.md: tope de giro configurable (attendYaw, defecto 0.45);
+         * sin override explícito se conserva el comportamiento v2.5 (0.6). */
+        var yawLimit = opts.attendYaw != null ? attendYawCap : 0.6;
+        yawOut = F.clamp(gazeX * attendYawK, -yawLimit, yawLimit); /* giro hacia el usuario */
       }
+      var g = F.sanitizeVec(gazeX, gazeY);
 
       var f = bank.filter(now / 1000, { gx: g.x, gy: g.y, open: openAvg, yaw: yawOut });
       var s = F.sanitizeVec(f.gx, f.gy);
@@ -417,6 +425,12 @@
            * modelo (modelAssetPath undefined) y la inferencia devolvía 0 caras:
            * "no sigue el rostro" incluso con todo lo demás correcto. */
           cfg.modelUrl = cfg.modelUrl || cfg.modelPath;
+          /* parches.md §2d — las URLs relativas dentro del Worker se resolvían
+           * contra src/tracking/track.worker.js (404 de bundle/WASM/modelo).
+           * Se pasan absolutas. */
+          ['bundleUrl', 'wasmPaths', 'modelPath', 'modelUrl'].forEach(function (k) {
+            if (typeof cfg[k] === 'string') cfg[k] = absUrl(cfg[k]);
+          });
           backend = T.Backends
             ? T.Backends.create(opts.backend || 'auto', {
                 workerUrl: opts.workerUrl,

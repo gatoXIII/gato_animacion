@@ -66,38 +66,26 @@
    *   - Si no hay stream reutilizable, se abre uno propio vía MM_Media.
    *   - Señales de emoción desactivadas (signals:false): la IA de la llamada es
    *     la única dueña de las emociones (plan §4). */
+  /* parches.md §3b — sin stream compartido NO se abre una captura propia en
+   * la apertura del overlay: la cámara solo se enciende por acción explícita
+   * del usuario (botón de seguimiento o «Iniciar llamada» → stream local de
+   * la sesión, reutilizable vía MM_TRACKING.getStream()). */
   function startCallTracking() {
-    if (callBridge || !window.MM_Tracking || !window.MM_EmotionPolicy) return;
-    /* v2.5 — mate null: en la primera apertura ensureSession() ejecuta
-     * buildBot() antes de llegar aquí, pero si el overlay falló o se reabre
-     * tras un error, mate puede ser null y MM_Tracking.create lanzaba un
-     * TypeError que call.js tragaba con console.warn → tracking "inexistente"
-     * sin diagnóstico. Gate explícito + log. */
-    if (!mate) { console.warn('[tracking-call] bot no construido; tracking de llamada omitido'); return; }
+    if (callBridge || !mate || !window.MM_Tracking || !window.MM_SHARED_POLICY) return;
     var stream = (window.MM_TRACKING && window.MM_TRACKING.getStream) ? window.MM_TRACKING.getStream() : null;
+    if (!stream) return;
     try {
-      var policy = window.MM_SHARED_POLICY || window.MM_EmotionPolicy.create({
-        exists: function (id) { return !!MM.config.getRaw(id); }
-      });
-      var opts = {
+      callBridge = window.MM_Tracking.create({
         mate: mate,
-        policy: policy,
+        stream: stream,
+        policy: window.MM_SHARED_POLICY,
         signals: false,
+        mode: 'attend',
         maxFaces: 3,
         mirror: true,
         lostAfterMs: 800
-      };
-      if (stream) {
-        opts.stream = stream;                      /* condición §3: cero captura extra */
-      } else {
-        if (!window.MM_Media) return;
-        opts.media = new window.MM_Media.MediaDeviceManager({});
-        opts.constraints = { width: 320, height: 240, frameRate: 30, facingMode: 'user' };
-      }
-      callBridge = window.MM_Tracking.create(opts);
-      if (window.MM_TRACKING && typeof window.MM_TRACKING.setCallBridge === 'function') {
-        window.MM_TRACKING.setCallBridge(callBridge);   /* visibilidad para rebind/teardown */
-      }
+      });
+      window.MM_TRACKING.setCallBridge(callBridge);
       callBridge.on(function (evt, data) {
         if (evt === 'warning') console.warn('[tracking-call]', data.message);
         if (evt === 'error') console.error('[tracking-call]', data.message);
@@ -107,11 +95,11 @@
         if (st && callBridge && callBridge.state === 'ACTIVE') st.textContent = 'Llamada + seguimiento facial activo.';
       }).catch(function (e) {
         console.warn('[tracking-call] no iniciado:', e.message || e);
-        if (callBridge) { try { callBridge.destroy(); } catch (er) {} callBridge = null; }
+        stopCallTracking();
       });
     } catch (e) {
       console.warn('[tracking-call] init falló:', e.message || e);
-      callBridge = null;
+      stopCallTracking();
     }
   }
 
@@ -193,6 +181,8 @@
 
     session = MM_Call.create({
       mate: mate,
+      /* parches.md §3c — política de emoción única compartida */
+      policy: window.MM_SHARED_POLICY,
       videoElement: $('callLocalVideo'),
       audioElements: [$('callRemoteAudio')],
       roomId: 'bot-call-index',
@@ -245,6 +235,10 @@
     if (window.MM_TRACKING && window.MM_TRACKING.active) {
       try { window.MM_TRACKING.suspendForCall(); } catch (e) { console.warn('[tracking] suspend:', e.message || e); }
     }
+    /* parches.md §3a — el bot de llamada debe existir ANTES de enlazar el
+     * tracker (mate era null en la primera apertura → MM_Tracking.create
+     * lanzaba y se tragaba con console.warn). */
+    ensureSession();         /* crea el bot antes de enlazar el tracker */
     startCallTracking();     /* bridge sobre el bot de llamada (stream compartido si existe) */
     lazySetup();
   }
