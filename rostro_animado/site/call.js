@@ -228,6 +228,8 @@
     requestAnimationFrame(function () { mask.classList.add('show'); });
     overlay.classList.add('open');
     overlay.setAttribute('aria-hidden', 'false');
+    /* v2.5b — el overlay queda accesible para AT solo cuando está abierto. */
+    try { overlay.inert = false; } catch (e) {}
     /* v2.4 (criterio §2): el bot de llamada es el objetivo del tracker si estaba
      * activo — se suspende el tracking de la galería para no mantener DOS
      * capturas/instancias de MediaPipe. El stream NO se libera con stopTracking:
@@ -245,7 +247,18 @@
   function closeCall() {
     mask.classList.remove('show');
     setTimeout(function () { mask.hidden = true; }, 300);
+    /* v2.5b — FIX "Blocked aria-hidden on an element because its descendant
+     * retained focus": el foco estaba en #callClose (dentro del overlay) y al
+     * poner aria-hidden=true el navegador bloqueaba el atributo. Se saca el
+     * foco del interior ANTES de ocultarlo (devolviéndolo al botón que abrió
+     * el modal, patrón recomendado por WAI-ARIA) y se marca `inert`, que sí
+     * previene el foco además de ocultarlo a las tecnologías de asistencia. */
+    var active = document.activeElement;
+    if (active && overlay.contains(active)) {
+      try { (toggleBtn && toggleBtn.offsetParent !== null ? toggleBtn : document.body).focus({ preventScroll: true }); } catch (e) {}
+    }
     overlay.classList.remove('open');
+    try { overlay.inert = true; } catch (e) {}
     overlay.setAttribute('aria-hidden', 'true');
     /* al cerrar, colgar si estaba en llamada para liberar dispositivos */
     if (session && session.rtc && session.rtc.pc) {
