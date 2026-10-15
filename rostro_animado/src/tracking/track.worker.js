@@ -1,12 +1,12 @@
 // rostro_animado/src/tracking/track.worker.js
 /* v2.5f-1 SELLO DE VERSIÓN — además del comentario, el worker EMITE
- * {type:'meta', build:'v2.5f-1'} al arrancar y Backends.js lo contrasta:
+ * {type:'meta', build:v2.5g-1} al arrancar y Backends.js lo contrasta:
  * si en consola NO aparece "[tracking][worker] build=v2.5f-1", el navegador
  * está ejecutando una copia VIEJA (cache de disco / service worker /
  * extensión), y esa —no el código— es la causa del error.
  * El mensaje "WorkerBackend: el bundle no exporta FaceLandmarker/FilesetResolver"
  * fue ELIMINADO de este archivo: solo puede provenir de código obsoleto. */
-var WORKER_BUILD = 'v2.5f-1';   /* sincronizar con Backends.js WORKER_BUILD */
+var WORKER_BUILD = 'v2.5g-1';   /* sincronizar con Backends.js WORKER_BUILD */
 /* ============================================================
  * track.worker.js — Backend Worker: inferencia MediaPipe fuera del hilo principal.
  *
@@ -91,6 +91,8 @@ async function fetchChecked(url, label) {
  * @param {string[]} urls candidatas (orden de preferencia)
  * @returns {Promise<{mod:Object, url:string}>}
  */
+var _importSeq = 0;   /* F4 FIX — clave unica por import: evita reutilizar el
+                       * resultado/error cacheado de un dynamic import previo */
 async function loadBundle(urls) {
   var lastErr = null;
   for (var i = 0; i < urls.length; i++) {
@@ -106,12 +108,12 @@ async function loadBundle(urls) {
       var blobUrl = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
       var m;
       try {
-        m = await import(/* webpackIgnore: true */ blobUrl);
+        m = await import(/* webpackIgnore: true */ blobUrl + '#r' + (++_importSeq));
       } catch (impErr) {
         /* variante MIME para navegadores estrictos con el sniffing de blobs */
         var alt = URL.createObjectURL(new Blob([text], { type: 'application/javascript' }));
         try {
-          m = await import(/* webpackIgnore: true */ alt);
+          m = await import(/* webpackIgnore: true */ alt + '#r' + (++_importSeq));
         } finally {
           setTimeout(function () { try { URL.revokeObjectURL(alt); } catch (er) {} }, 30000);
         }
@@ -137,9 +139,29 @@ async function loadModelBuffer(url) {
 }
 
 async function initFaceLandmarker(cfg) {
+  /* F2 FIX (v2.5g) — Base canónica del vendor, SIEMPRE derivada de la URL del
+   * script del worker (self.location), que vive en src/tracking/. Subir dos
+   * niveles desde ahí reproduce exactamente la resolución contra baseURI del
+   * documento que hace MpLoader/TrackingBridge en el hilo principal — incluso
+   * bajo subruta de despliegue (GH Pages). El fallback a origin+raíz se elimina
+   * porque era la causa del 404 en subruta. */
+  function workerVendorBase() {
+    try {
+      var loc = (typeof self !== 'undefined' && self.location) ? self.location : null;
+      if (loc && loc.href) {
+        var dir = loc.href.split('?')[0].split('#')[0];
+        dir = dir.slice(0, dir.lastIndexOf('/') + 1); /* .../src/tracking/ */
+        return new URL('../../assets/vendor/mediapipe/', dir).href;
+      }
+    } catch (e) { /* sin location (entornos de test) */ }
+    return 'assets/vendor/mediapipe/';
+  }
+  var WORKER_VENDOR_BASE = workerVendorBase();
+
   cfg = cfg || {};
   var candidates = [];
   if (cfg.bundleUrl) candidates.push(String(cfg.bundleUrl));
+  candidates.push(WORKER_VENDOR_BASE + 'vision_bundle.mjs');
   var cdnBundle = CDN_BASE + 'vision_bundle.mjs';
   if (candidates.map(function (u) { return u.split('#')[0].split('?')[0]; }).indexOf(cdnBundle) < 0) {
     candidates.push(cdnBundle);
@@ -151,10 +173,11 @@ async function initFaceLandmarker(cfg) {
   var remote = modUrl.indexOf(CDN_BASE) === 0;
 
   /* WASM: ruta local solo si el bundle ES local; si viene del CDN, el wasm
-   * tambien (versiones pinneadas coherentes bundle<->wasm). */
+   * tambien (versiones pinneadas coherentes bundle<->wasm). cfg.wasmPaths ya
+   * llega absoluto desde TrackingBridge (VENDOR_BASE vía document.baseURI). */
   var wasmPaths = remote ? (CDN_BASE + 'wasm/')
-    : (cfg.wasmPaths || (self.location && self.location.origin && self.location.origin !== 'null'
-        ? self.location.origin + '/assets/vendor/mediapipe/wasm/' : 'assets/vendor/mediapipe/wasm/'));
+    : (cfg.wasmPaths || (WORKER_VENDOR_BASE !== 'assets/vendor/mediapipe/'
+        ? WORKER_VENDOR_BASE + 'wasm/' : 'assets/vendor/mediapipe/wasm/'));
   resolver = await mod.FilesetResolver.forVisionTasks(wasmPaths);
 
   /* Modelo: ArrayBuffer descargado via fetch (inmune a la resolucion de

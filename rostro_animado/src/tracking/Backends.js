@@ -33,7 +33,7 @@
     var lastTs = 0;
     var disposed = false;
     /* Sello canónico: debe coincidir con WORKER_BUILD de track.worker.js */
-    var WORKER_BUILD = 'v2.5f-1';
+    var WORKER_BUILD = 'v2.5g-1';
 
     function init(config) {
       config = config || {};
@@ -48,7 +48,7 @@
          * y la causa del error queda identificada sin ambigüedad. */
         var wurl0 = opts.workerUrl || 'src/tracking/track.worker.js';
         if (!/^(https?:|blob:)/.test(wurl0)) {
-          try { wurl0 = new URL(wurl0, document.baseURL || (location.href.replace(/[^/]*$/, ''))).href; }
+          try { wurl0 = new URL(wurl0, document.baseURI || (location.href.replace(/[^/]*$/, ''))).href; }
           catch (eU) { /* dejar como está */ }
         }
         var expectedBuildRe = /WORKER_BUILD\s*=\s*'([^']+)'/;
@@ -74,7 +74,7 @@
            * en otro path daría 404 de script y el worker moriría sin mensaje. */
           var wurl = opts.workerUrl || 'src/tracking/track.worker.js';
           if (!/^(https?:|blob:)/.test(wurl)) {
-            wurl = new URL(wurl, document.baseURL || (location.href.replace(/[^/]*$/, ''))).href;
+            wurl = new URL(wurl, document.baseURI || (location.href.replace(/[^/]*$/, ''))).href;
           }
           /* v2.5d-1 — bypass de caché en la URL del worker: los Workers se
            * instancian desde la copia EN CACHÉ del script (cache de disco y,

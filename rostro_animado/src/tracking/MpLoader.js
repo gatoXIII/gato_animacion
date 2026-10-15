@@ -16,18 +16,30 @@
 (function (global) {
   'use strict';
 
-  /* v2.5 FIX — Rutas ABSOLUTAS de origen: las relativas se resuelven contra la
-   * URL del documento en el hilo principal, pero dentro del Worker se resuelven
-   * contra src/tracking/track.worker.js → 404 silencioso de bundle/WASM/modelo
-   * ("no sigue el rostro" sin error visible). location.origin funciona en ambos
-   * contextos (Worker hereda self.location con origin del documento). */
+  /* F2 FIX (v2.5g) — Base derivada de document.baseURI, NO de location.origin:
+   * bajo una subruta de despliegue (p. ej.
+   * https://usuario.github.io/proyecto/...) location.origin + '/assets/...'
+   * apunta a la RAÍZ del dominio → 404 de bundle/WASM/modelo. El patch 2d
+   * original usaba rutas relativas resueltas contra la base del documento, que
+   * sí funcionan en subruta; v2.5 lo sustituyó por origin y rompió GH Pages.
+   * document.baseURI termina en '/' o incluye el archivo: se recorta al
+   * directorio del documento antes de resolver. */
   function defaultVendorBase() {
     try {
+      var d = (typeof document !== 'undefined' && document) ? document : null;
+      var b = d && d.baseURI;
+      if (b && /^(https?:|file:)/.test(b)) {
+        var dir = b.split('?')[0].split('#')[0];
+        dir = dir.slice(0, dir.lastIndexOf('/') + 1);
+        return new URL('assets/vendor/mediapipe/', dir).href;
+      }
       var loc = (typeof self !== 'undefined' && self.location) ? self.location : null;
-      if (loc && loc.origin && loc.origin !== 'null') return loc.origin + '/assets/vendor/mediapipe/';
-      /* file:// u otros orígenes opacos: base relativa al directorio raíz del
-       * sitio conocida por convención (document y worker comparten origin). */
-    } catch (e) { /* entornos sin location (tests Node) */ }
+      if (loc && loc.href && /^(https?:|file:)/.test(loc.href)) {
+        var ldir = loc.href.split('?')[0].split('#')[0];
+        ldir = ldir.slice(0, ldir.lastIndexOf('/') + 1);
+        return new URL('assets/vendor/mediapipe/', ldir).href;
+      }
+    } catch (e) { /* entornos sin location/document (tests Node) */ }
     return 'assets/vendor/mediapipe/';
   }
   var VENDOR_BASE = defaultVendorBase();
@@ -39,6 +51,11 @@
   var CDN_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/';
   var MODEL_CDN_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
   var _cache = null;
+  /* F4 FIX — contador de reintentos de import: cada intento usa un fragmento
+   * único en la URL del blob, evitando que el navegador devuelva el resultado
+   * (o el error) cacheado de un import previo con la misma clave. */
+  var _importSeq = 0;
+  var _blobUrls = [];
 
   function assert(cond, msg) {
     if (!cond) throw new Error('MpLoader: ' + msg);
@@ -57,6 +74,11 @@
       var cdn = opts.cdnBase || CDN_BASE;
       var mod;
       var modFromCdn = false;   /* true ⇒ el vendor local falló: todo lo demás va al CDN */
+      /* F4 FIX — los objectURL de módulos ya instanciado se conservan en el
+       * ciclo de vida del loader (revocados solo vía destroy()): revocar la URL
+       * de un módulo ES ya evaluado es innecesario y rompería cualquier
+       * resolución secundaria contra esa base. */
+      var _blobUrlsRef = _blobUrls;
       /* ============================================================
        * v2.5d FIX — carga canónica por contenido (igual que track.worker.js):
        * `import(url)` directo tiene dos fallos silenciosos indistinguibles:
@@ -66,6 +88,9 @@
        *      grafo de módulos → reintentos devuelven el mismo error opaco.
        * Por eso NUNCA se importa la URL cruda: fetch → valida status/MIME/
        * símbolos → Blob(text/javascript) → import(objectURL). Inmune a ambos.
+       * F4 FIX (v2.5g) — además, cada reintento usa un fragmento único (#rN)
+       * en la URL del blob: si el navegador cachea/envenena un import fallido,
+       * la clave del grafo de módulos cambia y el reintento NO repite el error.
        * ============================================================ */
       function normKey(u) { return String(u).split('#')[0].split('?')[0]; }
       var candidates = [base];
@@ -85,16 +110,16 @@
             throw new Error('el contenido de ' + url + ' no contiene las exportaciones requeridas (¿corrupto o versión equivocada?)');
           }
           var blobUrl = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
+          _blobUrlsRef.push(blobUrl);
           var m;
           try {
-            m = await import(/* webpackIgnore: true */ blobUrl);
+            m = await import(/* webpackIgnore: true */ blobUrl + '#r' + (++_importSeq));
           } catch (impErr) {
             var alt = URL.createObjectURL(new Blob([text], { type: 'application/javascript' }));
-            try { m = await import(/* webpackIgnore: true */ alt); }
-            finally { setTimeout(function () { try { URL.revokeObjectURL(alt); } catch (er) {} }, 30000); }
-            if (!m) throw impErr;
+            _blobUrlsRef.push(alt);
+            try { m = await import(/* webpackIgnore: true */ alt + '#r' + (++_importSeq)); }
+            catch (er2) { throw impErr; }
           }
-          setTimeout(function () { try { URL.revokeObjectURL(blobUrl); } catch (er) {} }, 30000);
           if (!m || !m.FaceLandmarker || !m.FilesetResolver) {
             var keys = m ? Object.keys(m).slice(0, 8).join(',') : 'undefined';
             throw new Error('el módulo instanciado desde ' + url + ' no exporta las clases requeridas (exports: ' + (keys || 'ninguno') + ')');

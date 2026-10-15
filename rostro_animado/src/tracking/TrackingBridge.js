@@ -121,14 +121,14 @@
      * geometría del rostro en el frame. El parpadeo (EAR) sigue siendo imitación
      * en ambos modos (único canal mimic por diseño). */
     var mode = (opts.mode === 'mimic') ? 'mimic' : 'attend';
-    var attendGainX = opts.attendGainX != null ? +opts.attendGainX : 2.4;
-    var attendGainY = opts.attendGainY != null ? +opts.attendGainY : 1.6;
-    var attendYawK  = opts.attendYawK  != null ? +opts.attendYawK  : 0.9;
-    /* parches.md §2a — compatibilidad con la API del patch: ganancia única y
-     * tope de yaw; los nombres específicos v2.5 (attendGainX/Y, attendYawK)
-     * siguen teniendo prioridad si se pasan en opts. */
+    /* 2a FIX — API canónica de parches.md §2a: attendGain (ganancia única) y
+     * attendYaw (tope de yaw). Los nombres específicos v2.5 (attendGainX/Y,
+     * attendYawK) quedan como overrides opcionales con prioridad si se pasan. */
     var attendGain = opts.attendGain != null ? +opts.attendGain : 1.5;
-    var attendYawCap = opts.attendYaw != null ? +opts.attendYaw : 0.45;
+    var attendYaw = opts.attendYaw != null ? +opts.attendYaw : 0.45;
+    var attendGainX = opts.attendGainX != null ? +opts.attendGainX : attendGain;
+    var attendGainY = opts.attendGainY != null ? +opts.attendGainY : attendGain * 0.9;
+    var attendYawK = opts.attendYawK != null ? +opts.attendYawK : 1;
     var oe = opts.oneEuro || {};
     function dz(v) { return Math.abs(v) < 0.04 ? 0 : v; }
     function absUrl(u) { try { return new URL(u, document.baseURI).href; } catch (e) { return u; } }
@@ -283,8 +283,8 @@
       } else {
         /* attend/parches.md §2c: dónde ESTÁ la persona en el encuadre → hacia
          * dónde mira/gira el avatar. cx/cy normalizados [0,1] sobre los
-         * landmarks de la cara seleccionada; by0 sesgado a 0.45 porque los
-         * rostros suelen quedar algo por encima del centro del encuadre. */
+         * landmarks de la cara seleccionada; sesgo vertical a 0.45 (parches.md
+         * §2c) porque los rostros suelen quedar algo por encima del centro. */
         var minX = 1, maxX = 0, minY = 1, maxY = 0;
         for (var li = 0; li < lmArr.length; li++) {
           var p = lmArr[li];
@@ -294,13 +294,18 @@
           if (p.y > maxY) maxY = p.y;
         }
         var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-        var ex = mirror ? (0.5 - cx) : (cx - 0.5);   /* desplazamiento espejado */
-        gazeX = dz(ex * attendGainX);
-        gazeY = dz((cy - 0.5) * attendGainY);
-        /* parches.md: tope de giro configurable (attendYaw, defecto 0.45);
-         * sin override explícito se conserva el comportamiento v2.5 (0.6). */
-        var yawLimit = opts.attendYaw != null ? attendYawCap : 0.6;
-        yawOut = F.clamp(gazeX * attendYawK, -yawLimit, yawLimit); /* giro hacia el usuario */
+        /* 2c FIX — fórmula canónica de parches.md §2c: nx/ny centrados y
+         * multiplicados por 2; ex espejado derivado de nx (con mirror=true,
+         * nx ya está espejado → ex = -nx coincide con el comportamiento v2.5). */
+        var nx = ((cx - 0.5) * 2);
+        var ny = ((cy - 0.45) * 2);
+        if (mirror) nx = -nx;
+        gazeX = dz(nx * attendGainX);
+        gazeY = dz(ny * attendGainY * 0.9);
+        /* 2a FIX — tope de giro = attendYaw (defecto 0.45), aplicado tras
+         * clamp(gazeX,-1,1), idéntico a parches.md §2c. La ganancia angular
+         * del patch es 1; solo un override explícito attendYawK la modifica. */
+        yawOut = F.clamp(gazeX * attendYawK, -1, 1) * attendYaw;   /* gira la cabeza hacia la persona */
       }
       var g = F.sanitizeVec(gazeX, gazeY);
 
@@ -434,7 +439,10 @@
           backend = T.Backends
             ? T.Backends.create(opts.backend || 'auto', {
                 workerUrl: opts.workerUrl,
-                onError: function (e) { emit('warning', { message: e.message }); }
+                onError: function (e) { emit('warning', { message: e.message }); },
+                /* F4 FIX — onWarning propagado: sin esto se perdía el aviso del
+                 * worker (p. ej. caída de GPU→CPU en MediaPipe). */
+                onWarning: function (e) { emit('warning', { message: e.message }); }
               })
             : null;
           if (!backend) throw new Error('cargue primero src/tracking/Backends.js');
@@ -460,11 +468,16 @@
               throw eInit;
             }
           }
-          if (myEpoch !== epoch || stopped) throw new Error('__cancelled__');
+          /* F1 FIX — `|| stopped` eliminado: `stopped` vale true por diseño hasta
+           * el final de start(), por lo que la comprobación cancelaba SIEMPRE el
+           * arranque tras init() con éxito (state='IDLE' silencioso, toast falso).
+           * La invalidación legítima de stop()/destroy() en vuelo la gestiona el
+           * epoch (§2e). El catch de cancelación hace teardown completo y setState. */
+          if (myEpoch !== epoch) throw new Error('__cancelled__');
           await acquireStream();
-          if (myEpoch !== epoch || stopped) throw new Error('__cancelled__');
+          if (myEpoch !== epoch) throw new Error('__cancelled__');
           await video.play();
-          if (myEpoch !== epoch || stopped) throw new Error('__cancelled__');
+          if (myEpoch !== epoch) throw new Error('__cancelled__');
           stopped = false;
           lastSeenAt = performance.now();
           loop();
