@@ -32,11 +32,41 @@
     var pending = null;          /* resolver del frame en vuelo (backpressure: 1 in-flight) */
     var lastTs = 0;
     var disposed = false;
+    /* Sello canónico: debe coincidir con WORKER_BUILD de track.worker.js */
+    var WORKER_BUILD = 'v2.5f-1';
 
     function init(config) {
       config = config || {};
       return new Promise(function (resolve, reject) {
         if (disposed) { reject(new Error('WorkerBackend: backend destruido')); return; }
+        /* v2.5f — RESOLUCIÓN SINCRÓNICA DEL BUILD REAL ANTES DE INSTANCIAR:
+         * se hace fetch(cache:'reload') del script del worker y se busca el
+         * sello WORKER_BUILD en el TEXTO. Así sabemos si el ARCHIVO EN SERVIDOR
+         * es actual o viejo — independiente de qué copia ejecute el navegador.
+         * Un build desalineado aquí significa que el servidor está sirviendo
+         * una versión obsoleta (p. ej. se editó otro directorio / no se salvó),
+         * y la causa del error queda identificada sin ambigüedad. */
+        var wurl0 = opts.workerUrl || 'src/tracking/track.worker.js';
+        if (!/^(https?:|blob:)/.test(wurl0)) {
+          try { wurl0 = new URL(wurl0, document.baseURL || (location.href.replace(/[^/]*$/, ''))).href; }
+          catch (eU) { /* dejar como está */ }
+        }
+        var expectedBuildRe = /WORKER_BUILD\s*=\s*'([^']+)'/;
+        var preflight = (typeof fetch === 'function')
+          ? fetch(wurl0, { cache: 'reload' })
+              .then(function (r) { return r.ok ? r.text() : ''; })
+              .catch(function () { return ''; })
+          : Promise.resolve('');
+
+        preflight.then(function (srcText) {
+        /* build realmente presente en el ARCHIVO SERVIDO (no asumido). */
+        var mBuild = expectedBuildRe.exec(srcText || '');
+        var serverBuild = mBuild ? mBuild[1] : '(sin sello: archivo VIEJO en servidor)';
+        if (!mBuild || mBuild[1] !== WORKER_BUILD) {
+          console.warn('[tracking][worker] el SERVIDOR está sirviendo track.worker.js build=' + serverBuild +
+            ' (esperado ' + WORKER_BUILD + '). Verifica que el python -m http.server apunta al directorio ' +
+            'editado y que el archivo se guardó.');
+        }
         try {
           /* v2.5 — URL absoluta del worker: new Worker(res) se resuelve contra
            * la URL del DOCUMENTO, no del script; en call.html (raíz) la ruta
@@ -73,7 +103,23 @@
           reject(new Error('WorkerBackend: no se pudo crear el Worker — ' + e.message));
           return;
         }
+        /* v2.5f — DIAGNÓSTICO DE VERSIÓN EJECUTADA: el worker se auto-anuncia
+         * con {type:'meta', build} al instanciarse (antes del init). El host
+         * contrasta ese build con WORKER_BUILD y con el sello leído del archivo
+         * servido (preflight): tres fuentes —esperado/servido/en memoria— que
+         * eliminan toda ambigüedad entre "bug en el código" y "copia cacheada
+         * vieja ejecutándose". */
+        var metaSeen = false;
         var settled = false;
+        /* v2.5f — si tras 4 s el worker NUNCA se anunció con 'meta', es una
+         * copia vieja (los builds nuevos siempre emiten meta al instanciarse)
+         * o murió en tiempo de análisis: diagnóstico explícito, no silencio. */
+        setTimeout(function () {
+          if (!metaSeen && !disposed) {
+            console.warn('[tracking][worker] sin anuncio de build tras 4 s → el script ejecutado es ANTERIOR a v2.5f ' +
+              '(cache/SW/extensión) o falló al parsear. Borrar datos del sitio y recargar con Ctrl+Shift+R.');
+          }
+        }, 4000);
         var to = setTimeout(function () {
           if (settled) return;
           settled = true;
@@ -83,7 +129,17 @@
 
         worker.onmessage = function (ev) {
           var m = ev.data || {};
-          if (m.type === 'ready') {
+          if (m.type === 'meta') {
+            metaSeen = true;
+            if (m.build !== WORKER_BUILD) {
+              console.warn('[tracking][worker] build en memoria=' + m.build +
+                ' esperado=' + WORKER_BUILD + ' → el navegador ejecuta una copia VIEJA del worker ' +
+                '(cache de disco / service worker registrado / extensión interceptora). ' +
+                'Acción: DevTools → Application → Clear site data + Unregister service workers, o Chrome → Más herramientas → Borrar datos de navegación → "Imagen en caché" con "Todo el tiempo", y recarga con Ctrl+Shift+R.');
+            } else {
+              console.info('[tracking][worker] build=' + m.build + ' (versión actual en ejecución)');
+            }
+          } else if (m.type === 'ready') {
             clearTimeout(to);
             if (!settled) { settled = true; ready = true; resolve(); }
           } else if (m.type === 'result') {
@@ -108,6 +164,9 @@
           else if (opts.onError) opts.onError(err);
         };
         worker.postMessage({ type: 'init', config: config });
+        }).catch(function (e) {
+          if (!settled) { settled = true; terminateQuiet(); reject(e); }
+        });
       });
     }
 

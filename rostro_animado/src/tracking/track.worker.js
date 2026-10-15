@@ -1,9 +1,12 @@
 // rostro_animado/src/tracking/track.worker.js
-/* v2.5d-1 SELLO DE VERSIÓN — si este comentario NO aparece en la pestaña
- * Network → track.worker.js, el navegador está ejecutando una copia vieja
- * (cache de disco / service worker registrado / extensión interceptora).
+/* v2.5f-1 SELLO DE VERSIÓN — además del comentario, el worker EMITE
+ * {type:'meta', build:'v2.5f-1'} al arrancar y Backends.js lo contrasta:
+ * si en consola NO aparece "[tracking][worker] build=v2.5f-1", el navegador
+ * está ejecutando una copia VIEJA (cache de disco / service worker /
+ * extensión), y esa —no el código— es la causa del error.
  * El mensaje "WorkerBackend: el bundle no exporta FaceLandmarker/FilesetResolver"
  * fue ELIMINADO de este archivo: solo puede provenir de código obsoleto. */
+var WORKER_BUILD = 'v2.5f-1';   /* sincronizar con Backends.js WORKER_BUILD */
 /* ============================================================
  * track.worker.js — Backend Worker: inferencia MediaPipe fuera del hilo principal.
  *
@@ -196,6 +199,11 @@ async function initFaceLandmarker(cfg) {
     return await mod.FaceLandmarker.createFromOptions(resolver, opts);
   }
 }
+
+/* v2.5f — auto-anuncio de build: el worker se identifica ANTES de cualquier
+ * init, para que el host (Backends.js) pueda contrastar la versión realmente
+ * en ejecución y detectar copias cacheadas obsoletas. */
+post('meta', { build: WORKER_BUILD });
 
 self.onmessage = async function (ev) {
   var msg = ev.data || {};

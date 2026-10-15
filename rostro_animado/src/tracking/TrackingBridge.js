@@ -438,7 +438,28 @@
               })
             : null;
           if (!backend) throw new Error('cargue primero src/tracking/Backends.js');
-          await backend.init(cfg);
+          try {
+            await backend.init(cfg);
+          } catch (eInit) {
+            /* v2.5f — FALLBACK AUTOMÁTICO WORKER→MAIN: si el worker falla por
+             * cualquier causa del path de carga (cache obsoleta, SW, MIME,
+             * grafo de módulos envenenado), se reintenta en el hilo principal
+             * vía MpLoader (mismo pipeline validado, solo cambia el hilo de
+             * inferencia). El seguimiento queda FUNCIONAL y el diagnóstico del
+             * worker original se conserva en consola. opts.backend==='worker'
+             * explícito desactiva el fallback (modo estricto de depuración). */
+            var kindWanted = opts.backend || 'auto';
+            if (kindWanted !== 'worker' && T.MpLoader) {
+              console.warn('[MM_Tracking] WorkerBackend falló (' + ((eInit && eInit.message) || eInit) +
+                ') → reintentando con MainThreadBackend (fallback v2.5f).');
+              if (backend) { try { backend.dispose(); } catch (er) {} }
+              backend = T.Backends.create('main', { onError: function (e) { emit('warning', { message: e.message }); } });
+              await backend.init(cfg);
+              emit('warning', { message: 'tracking en hilo principal (worker no disponible)' });
+            } else {
+              throw eInit;
+            }
+          }
           if (myEpoch !== epoch || stopped) throw new Error('__cancelled__');
           await acquireStream();
           if (myEpoch !== epoch || stopped) throw new Error('__cancelled__');
