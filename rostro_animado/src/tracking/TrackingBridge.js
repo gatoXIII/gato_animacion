@@ -109,9 +109,29 @@
     var earClosed = opts.earClosed != null ? opts.earClosed : 0.06;
     var earOpen = opts.earOpen != null ? opts.earOpen : 0.22;
     var mirror = opts.mirror !== false;
+    /* v2.5 — modo de mirada (decisión de producto):
+     *   'attend' (default): el avatar MIRAL AL USUARIO — la posición del rostro
+     *     dentro del encuadre se mapea a gaze objetivo y giro de cabeza. Con
+     *     webcam espejada, moverse a la derecha del encuadre → el bot mira y
+     *     gira a su derecha (coincidencia visual directa con el usuario).
+     *   'mimic': copia la dirección de mirada/yaw del usuario (plan D7/D10
+     *     original; el avatar imita en vez de atender).
+     * irisGaze/yawFromLandmarks devuelven HACIA DÓNDE mira/gira la persona, no
+     * DÓNDE está: en 'attend' esas señales se ignoran para gaze/yaw y manda la
+     * geometría del rostro en el frame. El parpadeo (EAR) sigue siendo imitación
+     * en ambos modos (único canal mimic por diseño). */
+    var mode = (opts.mode === 'mimic') ? 'mimic' : 'attend';
+    var attendGainX = opts.attendGainX != null ? +opts.attendGainX : 2.4;
+    var attendGainY = opts.attendGainY != null ? +opts.attendGainY : 1.6;
+    var attendYawK  = opts.attendYawK  != null ? +opts.attendYawK  : 0.9;
     var oe = opts.oneEuro || {};
 
     var state = 'IDLE';
+    /* v2.5 — epoch/generación: si destroy() ocurre durante start() (await de
+     * backend.init/acquireStream), las promesas en vuelo y el rAF del ciclo
+     * anterior deben autodescartarse; sin esto quedaba cámara abierta + bridge
+     * fantasma inferenciando contra un mate destruido. */
+    var epoch = 0;
     var listeners = [];
     var rafId = 0;
     var stopped = true;
@@ -144,7 +164,12 @@
     var video = opts.videoElement || document.createElement('video');
     if (!opts.videoElement) {
       video.muted = true; video.playsInline = true; video.autoplay = true;
+      /* v2.5 FIX — era opacity:0 SIN position:absolute: un <video> con stream
+       * activo ocupa flujo normal, empujaba el layout del stage y en algunos
+       * navegadores se autorretrataba sobre la escena. 1px + aria-hidden basta. */
       video.style.position = 'absolute';
+      video.style.left = '-9999px';
+      video.style.top = '0';
       video.style.width = '1px';
       video.style.height = '1px';
       video.style.opacity = '0';
@@ -253,6 +278,24 @@
       );
       var openAvg = F.opennessFromEAR((earL + earR) / 2, earClosed, earOpen);
 
+      /* v2.5 — modo 'attend': señal objetivo = posición del rostro en el
+       * encuadre (espejado), no la dirección de mirada/cabeza del usuario.
+       * cx/cy normalizados [0,1] sobre los landmarks de la cara seleccionada. */
+      if (mode === 'attend') {
+        var minX = 1, maxX = 0, minY = 1, maxY = 0;
+        for (var li = 0; li < lmArr.length; li++) {
+          var p = lmArr[li];
+          if (p.x < minX) minX = p.x;
+          if (p.x > maxX) maxX = p.x;
+          if (p.y < minY) minY = p.y;
+          if (p.y > maxY) maxY = p.y;
+        }
+        var cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        var ex = mirror ? (0.5 - cx) : (cx - 0.5);   /* desplazamiento espejado */
+        g = F.sanitizeVec(ex * attendGainX, (cy - 0.5) * attendGainY);
+        yawOut = F.clamp(ex * attendYawK, -0.6, 0.6); /* giro hacia el usuario */
+      }
+
       var f = bank.filter(now / 1000, { gx: g.x, gy: g.y, open: openAvg, yaw: yawOut });
       var s = F.sanitizeVec(f.gx, f.gy);
 
@@ -274,6 +317,7 @@
         lastProbeAt = n;
       }
       inflight = true;
+      var myEpoch = epoch;
       try {
         var t = performance.now();
         var raw;
@@ -284,11 +328,16 @@
         } else {
           raw = await backend.frame(video, t);
         }
+        /* v2.5 — puente destruido/reiniciado durante la inferencia en vuelo:
+         * descartar resultado y detener este ciclo (no tocar mates viejos). */
+        if (myEpoch !== epoch || stopped) return;
         onFrame(raw);
       } catch (e) {
-        if (state !== 'ERROR') setState('ERROR', String((e && e.message) || e));
+        if (myEpoch === epoch && !stopped && state !== 'ERROR') {
+          setState('ERROR', String((e && e.message) || e));
+        }
       } finally {
-        inflight = false;
+        if (myEpoch === epoch) inflight = false;
       }
     }
 
@@ -342,12 +391,18 @@
 
       start: async function () {
         if (state === 'ACQUIRING' || state === 'ACTIVE') return;
+        epoch++;                          /* v2.5 — invalida ciclos anteriores */
+        var myEpoch = epoch;
         setState('ACQUIRING', 'start');
         try {
+          /* v2.5 FIX — cfg sin hardcodear rutas relativas duplicadas: se parte
+           * de la VENDOR_BASE resuelta por MpLoader (absoluta de origen), que
+           * también usa el MainThreadBackend y el worker para wasm/bundle. */
+          var vendor = (T.MpLoader && T.MpLoader.VENDOR_BASE) || 'assets/vendor/mediapipe/';
           var cfg = Object.assign({
-            bundleUrl: 'assets/vendor/mediapipe/vision_bundle.mjs',
-            wasmPaths: 'assets/vendor/mediapipe/wasm/',
-            modelPath: 'assets/vendor/mediapipe/face_landmarker.task',
+            bundleUrl: vendor + 'vision_bundle.mjs',
+            wasmPaths: vendor + 'wasm/',
+            modelPath: vendor + 'face_landmarker.task',
             delegate: opts.delegate || 'GPU',
             numFaces: selector ? (opts.maxFaces != null ? opts.maxFaces : 3) : 1,
             /* v2.3.2 — umbrales bajados de 0.5 (default) a 0.3: con iluminación
@@ -370,25 +425,41 @@
             : null;
           if (!backend) throw new Error('cargue primero src/tracking/Backends.js');
           await backend.init(cfg);
+          if (myEpoch !== epoch || stopped) throw new Error('__cancelled__');
           await acquireStream();
+          if (myEpoch !== epoch || stopped) throw new Error('__cancelled__');
           await video.play();
+          if (myEpoch !== epoch || stopped) throw new Error('__cancelled__');
           stopped = false;
           lastSeenAt = performance.now();
           loop();
         } catch (e) {
+          if (String((e && e.message) || e) === '__cancelled__') {
+            /* destroy()/stop() durante el arranque: teardown completo aquí,
+             * NO propagar rechazo al caller (no es un fallo, es una cancelación). */
+            if (backend) { try { backend.dispose(); } catch (er) {} backend = null; }
+            releaseStream();
+            state = 'IDLE';
+            return;
+          }
           stopped = true;
           setState('ERROR', String((e && e.message) || e));
-          if (backend) { backend.dispose(); backend = null; }
+          if (backend) { try { backend.dispose(); } catch (er) {} backend = null; }
+          releaseStream();               /* v2.5 — no dejar LED encendido tras fallo */
           throw e;
         }
       },
 
-      stop: function () {
+      stop: function (stopOpts) {
+        epoch++;                          /* v2.5 — descarta work en vuelo */
         stopped = true;
         if (rafId) cancelAnimationFrame(rafId);
         rafId = 0;
         if (backend) { backend.dispose(); backend = null; }
-        releaseStream();
+        /* v2.5 — con stream compartido (opts.stream, sin cámara propia) NO se
+         * libera nada salvo que el host lo fuerce explícitamente: stop() de un
+         * bridge prestado no debe apagar la webcam de la llamada. */
+        if ((stopOpts && stopOpts.force) || ownStream) releaseStream();
         bank.reset();
         adapter.setEyeOpen(null);
         adapter.clearGaze({ source: 'tracker' });
@@ -400,6 +471,7 @@
        * la cámara propia si es exclusiva (evita dos luces LED encendidas). */
       suspend: function () {
         if (ownStream) { bridge.stop(); return; }
+        epoch++;                                /* v2.5 — descarta frame en vuelo */
         stopped = true;
         if (rafId) cancelAnimationFrame(rafId);
         rafId = 0;
@@ -407,11 +479,13 @@
       },
       resume: function () {
         if (ownStream) { bridge.start().catch(function () { /* ERROR ya emitido */ }); return; }
-        if (stopped) {
+        if (stopped && backend) {               /* v2.5 — sin backend no hay nada que reanudar */
           stopped = false;
           lastSeenAt = performance.now();
           setState('ACQUIRING', 'resume');
           loop();
+        } else if (stopped) {
+          bridge.start().catch(function () { /* ERROR ya emitido */ });
         }
       },
 
@@ -451,8 +525,19 @@
       },
       get lockedFaceKey() { return selector ? selector.lockedKey : null; },
 
+      /* v2.5 — acceso al stream de captura (propio o compartido) para hosts
+       * que quieran mostrar preview o compartirlo con un segundo bridge
+       * (cero doble captura, plan §3). */
+      getStream: function () { return video.srcObject || null; },
+
       destroy: function () {
-        bridge.stop();
+        /* v2.5 — stop() liberaba la cámara SIEMPRE, incluso con opts.stream
+         * compartido (llamada): colgaba el vídeo local del usuario en plena
+         * videollamada. El bridge propio solo es dueño de lo que él abrió;
+         * force=true (host que se apaga explícitamente) libera igualmente. */
+        var ownStreamNow = ownStream;
+        bridge.stop({ force: true });
+        if (ownStreamNow) releaseStream();
         if (selector && typeof selector.reset === 'function') selector.reset();
         listeners.length = 0;
         if (!opts.videoElement && video.parentNode) video.parentNode.removeChild(video);

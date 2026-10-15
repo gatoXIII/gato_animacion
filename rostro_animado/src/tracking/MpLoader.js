@@ -16,7 +16,21 @@
 (function (global) {
   'use strict';
 
-  var VENDOR_BASE = 'assets/vendor/mediapipe/';
+  /* v2.5 FIX — Rutas ABSOLUTAS de origen: las relativas se resuelven contra la
+   * URL del documento en el hilo principal, pero dentro del Worker se resuelven
+   * contra src/tracking/track.worker.js → 404 silencioso de bundle/WASM/modelo
+   * ("no sigue el rostro" sin error visible). location.origin funciona en ambos
+   * contextos (Worker hereda self.location con origin del documento). */
+  function defaultVendorBase() {
+    try {
+      var loc = (typeof self !== 'undefined' && self.location) ? self.location : null;
+      if (loc && loc.origin && loc.origin !== 'null') return loc.origin + '/assets/vendor/mediapipe/';
+      /* file:// u otros orígenes opacos: base relativa al directorio raíz del
+       * sitio conocida por convención (document y worker comparten origin). */
+    } catch (e) { /* entornos sin location (tests Node) */ }
+    return 'assets/vendor/mediapipe/';
+  }
+  var VENDOR_BASE = defaultVendorBase();
   var _cache = null;
 
   function assert(cond, msg) {

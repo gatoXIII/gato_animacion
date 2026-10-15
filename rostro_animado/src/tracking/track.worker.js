@@ -42,7 +42,12 @@ async function initFaceLandmarker(cfg) {
     (typeof Uint8Array !== 'undefined' && cfg.modelBuffer instanceof Uint8Array);
   var opts = {
     baseOptions: {
-      modelAssetPath: hasBuffer ? undefined : (cfg.modelUrl || cfg.modelPath || 'assets/vendor/mediapipe/face_landmarker.task'),
+      /* v2.5 — fallback absoluto de origen: si el host no pasó ruta, una
+       * relativa se resolvería aquí contra src/tracking/ → 404. */
+      modelAssetPath: hasBuffer ? undefined : (cfg.modelUrl || cfg.modelPath ||
+        ((self.location && self.location.origin && self.location.origin !== 'null')
+          ? self.location.origin + '/assets/vendor/mediapipe/face_landmarker.task'
+          : 'assets/vendor/mediapipe/face_landmarker.task')),
       modelAssetBuffer: hasBuffer ? cfg.modelBuffer : undefined,
       delegate: cfg.delegate || 'GPU'
     },

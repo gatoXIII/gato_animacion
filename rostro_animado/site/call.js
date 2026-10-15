@@ -68,9 +68,15 @@
    *     la única dueña de las emociones (plan §4). */
   function startCallTracking() {
     if (callBridge || !window.MM_Tracking || !window.MM_EmotionPolicy) return;
+    /* v2.5 — mate null: en la primera apertura ensureSession() ejecuta
+     * buildBot() antes de llegar aquí, pero si el overlay falló o se reabre
+     * tras un error, mate puede ser null y MM_Tracking.create lanzaba un
+     * TypeError que call.js tragaba con console.warn → tracking "inexistente"
+     * sin diagnóstico. Gate explícito + log. */
+    if (!mate) { console.warn('[tracking-call] bot no construido; tracking de llamada omitido'); return; }
     var stream = (window.MM_TRACKING && window.MM_TRACKING.getStream) ? window.MM_TRACKING.getStream() : null;
     try {
-      var policy = window.MM_EmotionPolicy.create({
+      var policy = window.MM_SHARED_POLICY || window.MM_EmotionPolicy.create({
         exists: function (id) { return !!MM.config.getRaw(id); }
       });
       var opts = {

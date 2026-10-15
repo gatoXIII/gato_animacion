@@ -38,7 +38,15 @@
       return new Promise(function (resolve, reject) {
         if (disposed) { reject(new Error('WorkerBackend: backend destruido')); return; }
         try {
-          worker = new Worker(opts.workerUrl || 'src/tracking/track.worker.js');
+          /* v2.5 — URL absoluta del worker: new Worker(res) se resuelve contra
+           * la URL del DOCUMENTO, no del script; en call.html (raíz) la ruta
+           * relativa 'src/tracking/...' coincide, pero si el host embedder está
+           * en otro path daría 404 de script y el worker moriría sin mensaje. */
+          var wurl = opts.workerUrl || 'src/tracking/track.worker.js';
+          if (!/^(https?:|blob:)/.test(wurl)) {
+            wurl = new URL(wurl, document.baseURL || (location.href.replace(/[^/]*$/, ''))).href;
+          }
+          worker = new Worker(wurl);
         } catch (e) {
           reject(new Error('WorkerBackend: no se pudo crear el Worker — ' + e.message));
           return;

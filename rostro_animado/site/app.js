@@ -1,5 +1,5 @@
 /* ============================================================
- * app.js —— Capa de interacción (shell del sitio de la galería, solo depende del SDK MoodMates + MM_I18N)
+ * app.js —— Capa de interacción (shell del sitio de la galería, depende del SDK MoodMates + MM_I18N + MM_Tracking)
  *
  * Responsabilidades:
  *   Hero de apertura (personaje de línea semioculto + auto-giro de entrada + pausa en viewport)
@@ -7,7 +7,13 @@
  *   Doble vista (muro / pasillo de álbum) + paginación con flechas / teclado
  *   Pestañas de agrupación, flujo de miniaturas, recorrido automático
  *   Cajón de configuración (personaje / línea de boceto / recorrido / simulación AI / importar/exportar)
- *   Bilingüe chino/inglés, temas claro/oscuro, persistencia en localStorage
+ *   Seguimiento facial (atención visual) ligado EXCLUSIVAMENTE al avatar principal `main`
+ *   Bilingüe español/inglés, temas claro/oscuro, persistencia en localStorage
+ *
+ * Mirada: la ÚNICA fuente de mirada es el tracker de cámara (MM_Tracking).
+ * No existe simulación por puntero: sin tracking el avatar no sigue al ratón.
+ *
+ * Emociones: gobernadas por IA/backend (handleAIMessage). El tracker nunca las toca.
  * ============================================================ */
 (function () {
   'use strict';
@@ -27,6 +33,8 @@
   function savePrefs() {
     try { localStorage.setItem(PREF_KEY, JSON.stringify(prefs)); } catch (e) { /* modo privado, ignorar */ }
   }
+  /* NOTA de privacidad: el estado del tracking NO se persiste. La cámara solo se
+   * enciende por una acción explícita del usuario en cada sesión. */
 
   /* ---------------- Referencias DOM ---------------- */
   var elStage = $('stage');
@@ -51,6 +59,8 @@
   var elAiInput = $('aiInput');
   var elLangToggle = $('langToggle');
   var elThemeToggle = $('themeToggle');
+  var elTrackToggle = $('faceTrackToggle');
+  var elTrackBadge = $('trackBadge');
 
   /* ---------------- Estado del sitio ---------------- */
   var currentTab = 'all';
@@ -94,60 +104,262 @@
     tipsTimer = setTimeout(function () { elTips.classList.remove('show'); }, 3200);
   }
 
-  /* ---------------- Seguimiento de mirada: pointermove a nivel window, caché de rectángulo 200ms ---------------- */
-  var gazeTargets = [];
-  function watchGaze(engine, el) {
-    gazeTargets.push({ engine: engine, el: el, rect: null, rectAt: 0 });
+  /* ============================================================
+   *  SEGUIMIENTO FACIAL — ciclo de vida
+   *
+   *  Propiedad de los recursos:
+   *    · La APP es dueña de la cámara (track.stream, una sola captura).
+   *    · El PUENTE (TrackingBridge) es dueño del worker + bucle rAF y recibe el
+   *      stream por opts.stream → nunca abre ni cierra la cámara por su cuenta.
+   *    · El puente se destruye y recrea en cada cambio de avatar / variante;
+   *      la captura se conserva SOLO durante ese relevo (sin segunda captura)
+   *      y se libera al apagar el tracking, ante error o al cerrar la página.
+   *
+   *  Reparto de canales (aislamiento estricto):
+   *    · Tracker  → setGaze / setEyeOpen / setLookYaw
+   *    · IA       → emoción + boca (handleAIMessage)
+   *    · signals:false → "rostro detectado/perdido" NUNCA emite emociones
+   * ============================================================ */
+  var TRACK_CAPTURE = { width: 320, height: 240, frameRate: 30 };
+  var track = {
+    enabled: false,             /* intención del usuario */
+    suspended: false,           /* cedido a la videollamada */
+    wasActiveBeforeCall: false,
+    bridge: null,
+    media: null,                /* MM_Media.MediaDeviceManager dedicado al tracking */
+    stream: null,               /* única captura de cámara */
+    seq: 0,                     /* generación: descarta callbacks de puentes ya destruidos */
+    state: 'IDLE',
+    error: ''
+  };
+  var acquirePromise = null;    /* single-flight de getUserMedia */
+  var callBridgeRef = null;
+
+  /** Devuelve la clave i18n del primer requisito que falte, o null si todo está disponible. */
+  function trackPrecheck() {
+    if (location.protocol === 'file:') return 'trackErrFile';
+    if (!window.MM_Tracking || typeof MM_Tracking.create !== 'function' ||
+        !MM_Tracking.Filters || !MM_Tracking.Backends) return 'trackErrModules';
+    if (!window.MM_SHARED_POLICY) return 'trackErrModules';
+    if (!window.MM_Media || !MM_Media.supportsMediaDevices()) return 'trackErrInsecure';
+    return null;
   }
-  function unwatchGaze(el) {
-    gazeTargets = gazeTargets.filter(function (t) { return t.el !== el; });
+
+  function describeTrackError(e) {
+    var name = e && e.name;
+    var msg = (e && e.message) || String(e);
+    if (name === 'NotAllowedError' || name === 'SecurityError') return I.t('trackErrDenied');
+    if (name === 'NotFoundError' || name === 'OverconstrainedError') return I.t('trackErrNoCam');
+    if (name === 'NotReadableError' || name === 'AbortError') return I.t('trackErrBusy');
+    return I.t('trackErrGeneric', { err: msg });
   }
-  function refreshGazeRects() {
-    gazeTargets.forEach(function (t) { t.rect = null; });
+
+  function liveStream() {
+    var s = track.stream;
+    if (!s) return null;
+    return s.getVideoTracks().some(function (t) { return t.readyState === 'live'; }) ? s : null;
   }
-  function clamp06(v) { return v < -0.6 ? -0.6 : (v > 0.6 ? 0.6 : v); }
-  /* P1: el puntero llega a >100 Hz; el trabajo real (lectura de rects + setGaze sobre
-   * todas las instancias) se coalescea a un máximo de 1 por fotograma en el próximo rAF,
-   * evitando hasta ~5x getBoundingClientRect forzado por evento en pantallas de alta tasa. */
-  var pendingPointer = null, gazeRaf = 0;
-  function flushGaze() {
-    gazeRaf = 0;
-    var e = pendingPointer;
-    if (!e) return;
-    pendingPointer = null;
-    var now = performance.now();
-    for (var i = 0; i < gazeTargets.length; i++) {
-      var t = gazeTargets[i];
-      if (!t.rect || now - t.rectAt > 200) {
-        t.rect = t.el.getBoundingClientRect();
-        t.rectAt = now;
+
+  /** Estado visible en la UI: botón de la barra superior + badge. */
+  function renderTrackUI() {
+    if (!elTrackToggle || !elTrackBadge) return;
+    var on = track.enabled;
+    elTrackToggle.classList.toggle('active', on);
+    elTrackToggle.setAttribute('aria-pressed', on ? 'true' : 'false');
+    elTrackToggle.title = I.t(on ? 'trackBtnOn' : 'trackBtnOff');
+    elTrackToggle.setAttribute('aria-label', I.t(on ? 'trackBtnOn' : 'trackBtnOff'));
+
+    var st = track.error ? 'ERROR' : (track.suspended ? 'SUSPENDED' : (on ? track.state : 'IDLE'));
+    var show = st !== 'IDLE';
+    elTrackBadge.className = 'track-badge' + (show ? ' show st-' + st.toLowerCase() : '');
+    elTrackBadge.textContent = show ? I.t('trackState_' + st) : '';
+    elTrackBadge.title = track.error || '';
+  }
+
+  /** Captura única y compartida. Single-flight: nunca dos getUserMedia concurrentes. */
+  function acquireCamera() {
+    var live = liveStream();
+    if (live) return Promise.resolve(live);
+    if (acquirePromise) return acquirePromise;
+    if (!track.media) track.media = new MM_Media.MediaDeviceManager({});
+    acquirePromise = track.media.startTrackingCamera(TRACK_CAPTURE).then(function (stream) {
+      acquirePromise = null;
+      if (!track.enabled) {
+        /* El usuario apagó el tracking mientras esperaba el permiso: no dejar la cámara abierta */
+        try { track.media.stopTrackingCamera(); } catch (e) { /* noop */ }
+        return null;
       }
-      var r = t.rect;
-      if (!r.width || !r.height) continue;
-      t.engine.setGaze(
-        clamp06((e.clientX - (r.left + r.width / 2)) / r.width) / 0.6,
-        clamp06((e.clientY - (r.top + r.height / 2)) / r.height) / 0.6
-      );
+      track.stream = stream;
+      stream.getVideoTracks().forEach(function (t) {
+        t.addEventListener('ended', function () {
+          if (track.stream !== stream) return;
+          failTracking(I.t('trackErrEnded'));
+        });
+      });
+      return stream;
+    }, function (e) {
+      acquirePromise = null;
+      throw e;
+    });
+    return acquirePromise;
+  }
+
+  function releaseCamera() {
+    track.stream = null;
+    if (track.media) {
+      try { track.media.stopTrackingCamera(); } catch (e) { console.warn('[tracking] stopTrackingCamera:', e); }
     }
   }
-  window.addEventListener('pointermove', function (e) {
-    /* coords en crudo: no retener objetos Event (conserva referencias nativas) */
-    pendingPointer = { clientX: e.clientX, clientY: e.clientY };
-    if (!gazeRaf) gazeRaf = requestAnimationFrame(flushGaze);
-  }, { passive: true });
-  document.addEventListener('pointerleave', function () {
-    gazeTargets.forEach(function (t) { t.engine.clearGaze(); });
+
+  /** Eventos del puente → UI. `starting`: el fallo de arranque lo reporta el catch, no este handler. */
+  function onTrackingEvent(evt, data, starting) {
+    if (evt === 'state') {
+      track.state = data.to;
+      renderTrackUI();
+    } else if (evt === 'warning') {
+      console.warn('[tracking]', data.message);
+      toast(I.t('trackWarn', { err: data.message }));
+    } else if (evt === 'error' && !starting) {
+      toast(I.t('trackErrGeneric', { err: data.message }), 'danger');
+    }
+  }
+
+  /**
+   * Detiene la inferencia (rAF), libera el worker y el <video> oculto del puente.
+   * opts.releaseCamera=true además apaga la captura.
+   */
+  function destroyTrackingBridge(opts) {
+    opts = opts || {};
+    track.seq++;                              /* invalida callbacks/promesas en vuelo */
+    var b = track.bridge;
+    track.bridge = null;
+    if (b) {
+      try { b.destroy(); } catch (e) { console.warn('[tracking] destroy:', e); }
+    }
+    if (opts.releaseCamera) releaseCamera();
+  }
+
+  /** Instancia un puente nuevo vinculado EXCLUSIVAMENTE al avatar principal. */
+  function bindTrackingToMain() {
+    if (!track.enabled || track.suspended || !main) return Promise.resolve(false);
+    destroyTrackingBridge();                  /* garantiza un único puente vivo */
+    var mySeq = ++track.seq;
+    var mate = main;
+    track.state = 'ACQUIRING';
+    renderTrackUI();
+
+    return acquireCamera().then(function (stream) {
+      if (!stream || mySeq !== track.seq) return false;
+      var starting = true;
+      var bridge = MM_Tracking.create({
+        mate: mate,
+        stream: stream,                       /* la app es dueña de la cámara */
+        policy: window.MM_SHARED_POLICY,      /* política única, sin duplicados */
+        signals: false,                       /* presencia ≠ emoción */
+        mode: 'attend',                       /* el avatar MIRA a la persona (no copia su mirada) */
+        maxFaces: 3,
+        mirror: true,
+        lostAfterMs: 800
+      });
+      track.bridge = bridge;
+      bridge.on(function (evt, data) {
+        if (mySeq === track.seq) onTrackingEvent(evt, data, starting);
+      });
+      return bridge.start().then(function () {
+        starting = false;
+        return mySeq === track.seq;
+      }, function (e) {
+        starting = false;
+        throw e;
+      });
+    }).catch(function (e) {
+      if (mySeq !== track.seq) return false;  /* relevado por otro bind/destroy: no es un error */
+      failTracking(describeTrackError(e));
+      return false;
+    });
+  }
+
+  /** Fallo explícito: apaga todo y lo muestra en la UI (nunca silencioso). */
+  function failTracking(msg) {
+    track.enabled = false;
+    track.suspended = false;
+    track.wasActiveBeforeCall = false;
+    destroyTrackingBridge({ releaseCamera: true });
+    track.state = 'IDLE';
+    track.error = msg;
+    renderTrackUI();
+    toast(msg, 'danger');
+    console.error('[tracking]', msg);
+  }
+
+  /** Encendido / apagado por acción del usuario. */
+  function setTrackingEnabled(on) {
+    on = !!on;
+    if (on === track.enabled) return;
+    if (on) {
+      track.error = '';
+      var pre = trackPrecheck();
+      if (pre) { failTracking(I.t(pre)); return; }
+      track.enabled = true;
+      renderTrackUI();
+      bindTrackingToMain().then(function (ok) {
+        if (ok) toast(I.t('toastTrackOn'), 'ok');
+      });
+    } else {
+      track.enabled = false;
+      track.suspended = false;
+      track.wasActiveBeforeCall = false;
+      destroyTrackingBridge({ releaseCamera: true });
+      track.state = 'IDLE';
+      track.error = '';
+      renderTrackUI();
+      toast(I.t('toastTrackOff'));
+    }
+  }
+
+  /* ---- Contrato con site/call.js (overlay de videollamada) ---- */
+  function suspendForCall() {
+    if (!track.enabled || track.suspended) return;
+    track.wasActiveBeforeCall = true;
+    track.suspended = true;
+    destroyTrackingBridge();                  /* worker + rAF fuera; la captura se conserva para la llamada */
+    renderTrackUI();
+  }
+  function restoreAfterCall() {
+    var was = track.wasActiveBeforeCall;
+    track.suspended = false;
+    track.wasActiveBeforeCall = false;
+    renderTrackUI();
+    if (was && track.enabled) bindTrackingToMain();
+    else if (!track.enabled) releaseCamera();
+  }
+
+  window.MM_TRACKING = {
+    get active() { return track.enabled && !track.suspended; },
+    get enabled() { return track.enabled; },
+    get state() { return track.state; },
+    get wasActiveBeforeCall() { return track.wasActiveBeforeCall; },
+    getStream: liveStream,
+    setEnabled: setTrackingEnabled,
+    suspendForCall: suspendForCall,
+    restoreAfterCall: restoreAfterCall,
+    setCallBridge: function (b) { callBridgeRef = b || null; },
+    callRebind: function (mate) { if (callBridgeRef) callBridgeRef.rebindMate(mate); }
+  };
+
+  window.addEventListener('pagehide', function () {
+    destroyTrackingBridge({ releaseCamera: true });
   });
-  window.addEventListener('resize', refreshGazeRects, { passive: true });
-  window.addEventListener('scroll', refreshGazeRects, { passive: true });
 
   /* ---------------- Personaje principal (reconstruir instancia al cambiar de personaje) ---------------- */
   function createMain(charId) {
     var emotion = main ? main.emotionId : selectedId;
-    if (main) {
-      main.destroy();
-      unwatchGaze(elStage);
-    }
+
+    /* 1. El puente del avatar saliente se destruye ANTES que el motor (limpia canales del mate viejo) */
+    destroyTrackingBridge();
+    if (main) main.destroy();
+
+    /* 2. Nuevo avatar */
     main = MM.create(elStage, {
       character: charId,
       variant: prefs.variants[charId] || '',
@@ -164,8 +376,10 @@
     });
     main.on('tips', function (e) { showTips(e.text); });
     main.on('error', function (e) { lastErrorAt = performance.now(); toast(e.message, 'danger'); });
-    watchGaze(main, elStage);
     window.MM_MAIN = main;   /* punto de acceso de depuración en consola */
+
+    /* 3. Re-vincular tracker al nuevo avatar en el mismo flujo */
+    if (track.enabled && !track.suspended) bindTrackingToMain();
   }
 
   /* ---------------- Cambio de personaje ---------------- */
@@ -223,7 +437,6 @@
         eyeScale: 1.35,
         label: ch.name
       });
-      watchGaze(engine, avatar);
 
       btn.addEventListener('click', function () {
         if (!engine.signature || !engine.signature(0.7)) engine.spin(1);
@@ -276,12 +489,10 @@
   function openStage() {
     if (!document.body.classList.contains('mode-wall') || stageOpen()) return;
     document.body.classList.add('stage-open');
-    refreshGazeRects();
   }
   function closeStage() {
     if (!stageOpen()) return;
     document.body.classList.remove('stage-open');
-    refreshGazeRects();
   }
   $('stageClose').addEventListener('click', closeStage);
   document.querySelector('.stage-zone').addEventListener('click', function (e) {
@@ -567,7 +778,6 @@
     document.body.classList.toggle('mode-album', prefs.mode === 'album');
     $('modeWall').classList.toggle('active', prefs.mode === 'wall');
     $('modeAlbum').classList.toggle('active', prefs.mode === 'album');
-    refreshGazeRects();
     requestAnimationFrame(centerSelected);
   }
   $('modeWall').addEventListener('click', function () { setMode('wall'); });
@@ -652,12 +862,12 @@
     fillCharSelect();
     fillVariantSelect();
     refreshDD();
+    renderTrackUI();
   }
   elLangToggle.addEventListener('click', function () {
     prefs.lang = prefs.lang === 'es' ? 'en' : 'es';
     savePrefs();
     applyI18n();
-    refreshGazeRects();
   });
 
   /* ---------------- Cajón de configuración ---------------- */
@@ -732,6 +942,13 @@
     toast(I.t('toastVariant', { name: cur ? cur.textContent : '' }), 'ok');
   });
 
+  /* ---------------- Seguimiento facial: control de UI ---------------- */
+  if (elTrackToggle) {
+    elTrackToggle.addEventListener('click', function () {
+      setTrackingEnabled(!track.enabled);
+    });
+  }
+
   /* ---------------- Simulación de conexión AI ---------------- */
   function sendAI() {
     var raw = elAiInput.value.trim();
@@ -793,7 +1010,6 @@
       eyeScale: 1.7,
       label: 'Mood Mates'
     });
-    watchGaze(brand, elBrand);
     elBrand.addEventListener('click', function () {
       if (!brand.signature || !brand.signature(0.6)) brand.spin(1);
     });
@@ -807,7 +1023,6 @@
       label: 'Mood Mates'
     });
     hero.setStyle({ sketch: 1 });
-    watchGaze(hero, $('heroBot'));
 
     /* Entrar con la acción de firma (sin firma, retroceder a girar); después las antics de espera de '02' se disparan periódicamente */
     setTimeout(function () {
@@ -864,6 +1079,7 @@
     buildThumbs();
     updateMeta();
     highlightSelected();
+    renderTrackUI();
   }
 
   /* Catálogo externo opcional: si existe data/emotions.json se aplica antes de arrancar.
