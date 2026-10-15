@@ -46,7 +46,29 @@
           if (!/^(https?:|blob:)/.test(wurl)) {
             wurl = new URL(wurl, document.baseURL || (location.href.replace(/[^/]*$/, ''))).href;
           }
-          worker = new Worker(wurl);
+          /* v2.5d-1 — bypass de caché en la URL del worker: los Workers se
+           * instancian desde la copia EN CACHÉ del script (cache de disco y,
+           * si existe, interceptación del service worker). Con python -m
+           * http.server (que envía Last-Modified y responde 304) el navegador
+           * podía seguir ejecutando una versión VIEJA del worker aunque el
+           * archivo en disco ya estuviera corregido — causa exacta de que el
+           * error "el bundle no exporta FaceLandmarker/FilesetResolver"
+           * sobreviviera a los fixes v2.5c/v2.5d (ese mensaje ya no existe
+           * en el código actual). El query ?v= fuerza una entrada de caché
+           * nueva; type:'module' permite dynamic import dentro del worker. */
+          try {
+            var wu = new URL(wurl);
+            wu.searchParams.set('v', String(Date.now()));
+            wurl = wu.href;
+          } catch (e) { /* URLs relativas degeneradas: se deja wurl intacta */ }
+          try {
+            worker = new Worker(wurl, { type: 'module' });
+          } catch (eMod) {
+            /* fallback defensivo: workers clásicos (clase sin dynamic import
+             * propio; el nuestro usa import() de blobs, soportado también por
+             * workers clásicos en Chrome/Firefox actuales) */
+            worker = new Worker(wurl);
+          }
         } catch (e) {
           reject(new Error('WorkerBackend: no se pudo crear el Worker — ' + e.message));
           return;

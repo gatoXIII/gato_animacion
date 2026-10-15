@@ -1,4 +1,9 @@
 // rostro_animado/src/tracking/track.worker.js
+/* v2.5d-1 SELLO DE VERSIÓN — si este comentario NO aparece en la pestaña
+ * Network → track.worker.js, el navegador está ejecutando una copia vieja
+ * (cache de disco / service worker registrado / extensión interceptora).
+ * El mensaje "WorkerBackend: el bundle no exporta FaceLandmarker/FilesetResolver"
+ * fue ELIMINADO de este archivo: solo puede provenir de código obsoleto. */
 /* ============================================================
  * track.worker.js — Backend Worker: inferencia MediaPipe fuera del hilo principal.
  *
