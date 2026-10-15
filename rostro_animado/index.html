@@ -107,7 +107,9 @@
 
   <!-- Cajón de configuración -->
   <div id="drawerMask" class="drawer-mask" hidden></div>
-  <aside id="drawer" class="drawer" aria-hidden="true">
+  <!-- v2.5b: inert oculta el cajón cerrado a AT Y previene que conserve foco
+       (aria-hidden solo no basta si un descendiente retiene el foco) -->
+  <aside id="drawer" class="drawer" aria-hidden="true" inert>
     <div class="drawer-head">
       <h2 data-i18n="drawerTitle">Configuración</h2>
       <button type="button" id="drawerClose" class="icon-btn" aria-label="Close">
@@ -178,7 +180,7 @@
        Reutiliza la capa multimedia src/media/* sobre el motor ya cargado en esta página.
        La versión standalone completa sigue disponible en call.html -->
   <div id="callMask" class="drawer-mask" hidden></div>
-  <aside id="callOverlay" class="call-overlay" aria-hidden="true">
+  <aside id="callOverlay" class="call-overlay" aria-hidden="true" inert>
     <div class="call-head">
       <h2 data-i18n="callTitle">📞 Videollamada con el bot</h2>
       <button type="button" id="callClose" class="icon-btn" aria-label="Close">
@@ -238,12 +240,12 @@
   <!-- Tracking + política compartida (EmotionPolicy DEBE cargar antes de CallSession.js:
        éste captura MM_EmotionPolicy en tiempo de carga) -->
   <script src="src/tracking/Filters.js"></script>
-  <script src="src/tracking/MpLoader.js"></script>
-  <script src="src/tracking/Backends.js"></script>
+  <script src="src/tracking/MpLoader.js?v=25d"></script>
+  <script src="src/tracking/Backends.js?v=25d"></script>
   <script src="src/media/EmotionPolicy.js"></script>
   <script src="site/shared-policy.js"></script>
   <script src="src/tracking/FaceSelector.js"></script>
-  <script src="src/tracking/TrackingBridge.js?v=25a"></script>
+  <script src="src/tracking/TrackingBridge.js?v=25d"></script>
 
   <!-- Capa multimedia -->
   <script src="src/media/MediaDeviceManager.js"></script>
@@ -251,7 +253,7 @@
   <script src="src/media/CallSession.js"></script>
 
   <script src="site/i18n.js?v=25a"></script>
-  <script src="site/app.js?v=25a"></script>
-  <script src="site/call.js?v=25a"></script>
+  <script src="site/app.js?v=25d"></script>
+  <script src="site/call.js?v=25d"></script>
 </body>
 </html>

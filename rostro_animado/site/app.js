@@ -871,15 +871,24 @@
   });
 
   /* ---------------- Cajón de configuración ---------------- */
+  var elSettingsToggle = $('settingsToggle');
   function openDrawer() {
     elDrawer.classList.add('open');
     elDrawer.setAttribute('aria-hidden', 'false');
+    try { elDrawer.inert = false; } catch (e) {}   /* v2.5b */
     elDrawerMask.hidden = false;
     requestAnimationFrame(function () { elDrawerMask.classList.add('show'); });
   }
   function closeDrawer() {
     closeAllDD();
+    /* v2.5b — igual que el overlay de llamada: sacar el foco del cajón antes
+     * de aria-hidden=true para evitar "Blocked aria-hidden … retained focus". */
+    var active = document.activeElement;
+    if (active && elDrawer.contains(active)) {
+      try { (elSettingsToggle && elSettingsToggle.offsetParent !== null ? elSettingsToggle : document.body).focus({ preventScroll: true }); } catch (e) {}
+    }
     elDrawer.classList.remove('open');
+    try { elDrawer.inert = true; } catch (e) {}
     elDrawer.setAttribute('aria-hidden', 'true');
     elDrawerMask.classList.remove('show');
     setTimeout(function () { elDrawerMask.hidden = true; }, 300);

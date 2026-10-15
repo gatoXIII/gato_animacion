@@ -25,30 +25,155 @@
 
 var landmarker = null;
 var mod = null;
+var modUrl = '';
 var resolver = null;
 var seq = 0;
+var CDN_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/';
+var MODEL_CDN_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
 
 function post(type, payload) {
   self.postMessage(Object.assign({ type: type, seq: ++seq }, payload || {}));
 }
 
-async function initFaceLandmarker(cfg) {
-  mod = await import(cfg.bundleUrl);
-  if (!mod.FaceLandmarker || !mod.FilesetResolver) {
-    throw new Error('el bundle no exporta FaceLandmarker/FilesetResolver');
+/* ============================================================
+ * v2.5d REESCRITURA DEL PATH DE CARGA (causa raiz del error
+ * "el bundle no exporta FaceLandmarker/FilesetResolver"):
+ *
+ * Los intentos previos hacian `await import(url)` DIRECTO sobre
+ * vision_bundle.mjs. Ese mecanismo tiene dos modos de fallo SILENCIOSO
+ * imposibles de distinguir desde dentro:
+ *   A) HTTP-cache/SW/extensiones sirven el .mjs con Content-Type
+ *      text/html (p. ej. un fallback SPA que devuelve index.html):
+ *      el import "funciona" pero el namespace sale SIN exports ->
+ *      exactamente el error reportado, aunque el archivo en disco sea
+ *      valido (verificado: exporta FaceLandmarker y FilesetResolver).
+ *   B) Un dynamic import que falla una vez queda ENVENENADO de forma
+ *      permanente en el grafo de modulos del contexto; cualquier
+ *      reintento devuelve el mismo error opaco sin la causa original.
+ *
+ * Solucion estructural: NUNCA se importa una URL cruda. Se hace:
+ *   fetch(url) -> valida respuesta (ok + content-type NO html + cuerpo
+ *   con los simbolos esperados) -> Blob(type:'text/javascript') ->
+ *   import(URL.createObjectURL(blob)).
+ * El blob es canonico por contenido: inmune al grafo envenenado, al
+ * MIME incorrecto y al HTML interpolado. Ademas el modelo se inyecta
+ * como modelAssetBuffer (ArrayBuffer descargado via fetch), eliminando
+ * la ultima dependencia de rutas resueltas dentro del worker.
+ * ============================================================ */
+
+async function fetchChecked(url, label) {
+  var r;
+  try {
+    r = await fetch(url, { cache: 'reload' });
+  } catch (e) {
+    throw new Error(label + ' no accesible (' + url + '): ' + ((e && e.message) || e));
   }
-  resolver = await mod.FilesetResolver.forVisionTasks(cfg.wasmPaths);
-  var hasBuffer = cfg.modelBuffer instanceof ArrayBuffer ||
-    (typeof Uint8Array !== 'undefined' && cfg.modelBuffer instanceof Uint8Array);
+  if (!r.ok) {
+    throw new Error(label + ' HTTP ' + r.status + ' en ' + url);
+  }
+  var ct = r.headers.get('content-type') || '';
+  if (/html|xml/i.test(ct)) {
+    throw new Error(label + ' servido como ' + ct + ' (' + url + ') - un SW, proxy o extension esta interceptando el asset; un import directo produciria un modulo vacio.');
+  }
+  return r;
+}
+
+/**
+ * Descarga el bundle y lo instancia como modulo ESM canonico via blob.
+ * @param {string[]} urls candidatas (orden de preferencia)
+ * @returns {Promise<{mod:Object, url:string}>}
+ */
+async function loadBundle(urls) {
+  var lastErr = null;
+  for (var i = 0; i < urls.length; i++) {
+    var url = urls[i];
+    try {
+      var r = await fetchChecked(url, 'bundle MediaPipe');
+      var text = await r.text();
+      /* Validacion semantica ANTES de instanciar: detecta HTML de error,
+       * truncamientos o versiones sin las clases necesarias. */
+      if (text.indexOf('FilesetResolver') < 0 || text.indexOf('FaceLandmarker') < 0) {
+        throw new Error('el contenido de ' + url + ' no contiene las exportaciones FaceLandmarker/FilesetResolver (archivo corrupto o version equivocada). Primeros 120 chars: ' + JSON.stringify(text.slice(0, 120)));
+      }
+      var blobUrl = URL.createObjectURL(new Blob([text], { type: 'text/javascript' }));
+      var m;
+      try {
+        m = await import(/* webpackIgnore: true */ blobUrl);
+      } catch (impErr) {
+        /* variante MIME para navegadores estrictos con el sniffing de blobs */
+        var alt = URL.createObjectURL(new Blob([text], { type: 'application/javascript' }));
+        try {
+          m = await import(/* webpackIgnore: true */ alt);
+        } finally {
+          setTimeout(function () { try { URL.revokeObjectURL(alt); } catch (er) {} }, 30000);
+        }
+        if (!m) throw impErr;
+      }
+      setTimeout(function () { try { URL.revokeObjectURL(blobUrl); } catch (er) {} }, 30000);
+      if (!m || !m.FaceLandmarker || !m.FilesetResolver) {
+        var keys = m ? Object.keys(m).slice(0, 8).join(',') : 'undefined';
+        throw new Error('el modulo instanciado desde ' + url + ' no exporta las clases requeridas (exports: ' + (keys || 'ninguno') + ')');
+      }
+      return { mod: m, url: url };
+    } catch (e) {
+      lastErr = e;
+      post('warning', { message: 'fallo cargando ' + url + ': ' + ((e && e.message) || e) });
+    }
+  }
+  throw lastErr || new Error('sin bundle MediaPipe disponible');
+}
+
+async function loadModelBuffer(url) {
+  var r = await fetchChecked(url, 'modelo face_landmarker.task');
+  return await r.arrayBuffer();
+}
+
+async function initFaceLandmarker(cfg) {
+  cfg = cfg || {};
+  var candidates = [];
+  if (cfg.bundleUrl) candidates.push(String(cfg.bundleUrl));
+  var cdnBundle = CDN_BASE + 'vision_bundle.mjs';
+  if (candidates.map(function (u) { return u.split('#')[0].split('?')[0]; }).indexOf(cdnBundle) < 0) {
+    candidates.push(cdnBundle);
+  }
+
+  var loaded = await loadBundle(candidates);
+  mod = loaded.mod;
+  modUrl = loaded.url;
+  var remote = modUrl.indexOf(CDN_BASE) === 0;
+
+  /* WASM: ruta local solo si el bundle ES local; si viene del CDN, el wasm
+   * tambien (versiones pinneadas coherentes bundle<->wasm). */
+  var wasmPaths = remote ? (CDN_BASE + 'wasm/')
+    : (cfg.wasmPaths || (self.location && self.location.origin && self.location.origin !== 'null'
+        ? self.location.origin + '/assets/vendor/mediapipe/wasm/' : 'assets/vendor/mediapipe/wasm/'));
+  resolver = await mod.FilesetResolver.forVisionTasks(wasmPaths);
+
+  /* Modelo: ArrayBuffer descargado via fetch (inmune a la resolucion de
+   * rutas relativas dentro del worker, causa historica de 404 silenciosos). */
+  var modelUrls = [];
+  if (!remote) {
+    if (cfg.modelUrl || cfg.modelPath) modelUrls.push(String(cfg.modelUrl || cfg.modelPath));
+  }
+  modelUrls.push(MODEL_CDN_URL);
+  var modelBuffer = null;
+  var lastModelErr = null;
+  for (var mi = 0; mi < modelUrls.length; mi++) {
+    try {
+      modelBuffer = await loadModelBuffer(modelUrls[mi]);
+      break;
+    } catch (e) {
+      lastModelErr = e;
+      if (mi < modelUrls.length - 1) {
+        post('warning', { message: 'modelo no disponible en ' + modelUrls[mi] + ', probando hosting oficial.' });
+      }
+    }
+  }
+  if (!modelBuffer) throw lastModelErr || new Error('sin modelo face_landmarker disponible');
+
   var opts = {
     baseOptions: {
-      /* v2.5 — fallback absoluto de origen: si el host no pasó ruta, una
-       * relativa se resolvería aquí contra src/tracking/ → 404. */
-      modelAssetPath: hasBuffer ? undefined : (cfg.modelUrl || cfg.modelPath ||
-        ((self.location && self.location.origin && self.location.origin !== 'null')
-          ? self.location.origin + '/assets/vendor/mediapipe/face_landmarker.task'
-          : 'assets/vendor/mediapipe/face_landmarker.task')),
-      modelAssetBuffer: hasBuffer ? cfg.modelBuffer : undefined,
+      modelAssetBuffer: new Uint8Array(modelBuffer),
       delegate: cfg.delegate || 'GPU'
     },
     runningMode: 'VIDEO',
